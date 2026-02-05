@@ -32,29 +32,45 @@ jobs:
 
       - name: Download and Setup SDK
         run: |
-          # 自动获取最新 23.05 版本的 SDK 下载链接
+          # 1. 下载 SDK
           SDK_URL="https://downloads.openwrt.org/releases/23.05.0/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-23.05.0-${{ matrix.target }}-${{ matrix.subtarget }}_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-          wget $SDK_URL
+          wget -q $SDK_URL
+          
+          # 2. 解压
+          echo "正在解压 SDK..."
           tar -xJf *.tar.xz
-          mv openwrt-sdk-* openwrt-sdk
+          
+          # 3. 动态寻找解压出来的文件夹并重命名为 openwrt-sdk
+          # 使用 find 寻找包含 "sdk" 字样的目录，避免硬编码文件夹全名
+          SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
+          if [ -d "$SDK_DIR" ]; then
+              mv "$SDK_DIR" openwrt-sdk
+              echo "成功找到并重命名 SDK 目录: $SDK_DIR"
+          else
+              echo "错误：未找到解压后的 SDK 目录！当前目录内容如下："
+              ls -F
+              exit 1
+          fi
 
       - name: Compile Package
         run: |
           cd openwrt-sdk
-          # 初始化 feeds 并将当前仓库代码放入 package 目录
+          # 创建包目录并复制源码
           mkdir -p package/iptv_scanner
           cp -r ../src ../Makefile package/iptv_scanner/
           
-          # 更新并安装必要的编译环境
+          # 更新 feeds 并安装依赖库
           ./scripts/feeds update -a
           ./scripts/feeds install libpcap
           
-          # 准备配置文件并编译
+          # 生成默认配置并编译
+          # 使用 -j$(nproc) 加速编译，V=s 显示详细日志
           make defconfig
-          make package/iptv_scanner/compile V=s
+          make package/iptv_scanner/compile V=s -j$(nproc)
 
       - name: Upload IPK
         uses: actions/upload-artifact@v4
         with:
           name: iptv_scanner-${{ matrix.arch }}
-          path: openwrt-sdk/bin/packages/${{ matrix.arch }}/base/iptv_scanner*.ipk
+          # 这里的路径使用通配符，以防 custom_feeds 目录名有变
+          path: openwrt-sdk/bin/packages/${{ matrix.arch }}/**/*.ipk
