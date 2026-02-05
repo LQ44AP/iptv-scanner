@@ -1,7 +1,9 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=iptv-scanner
+PKG_VERSION:=1.0
 PKG_RELEASE:=1
+
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
 include $(INCLUDE_DIR)/package.mk
@@ -9,7 +11,7 @@ include $(INCLUDE_DIR)/package.mk
 define Package/iptv-scanner
   SECTION:=utils
   CATEGORY:=Utilities
-  TITLE:=IPTV Multicast Scanner
+  TITLE:=IPTV Multicast Scanner (M3U Edition)
   DEPENDS:=+libpcap
 endef
 
