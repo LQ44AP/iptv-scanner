@@ -93,7 +93,7 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 
 int main(int argc, char *argv[]) {
     if (argc < 5) {
-        printf("\nIPTV 全端口单线程去重扫描器\n");
+        printf("\nIPTV 全端口单线程扫描器\n");
         printf("用法: %s <网卡> <M3U保存路径> <秒数> <前缀1> [前缀2...]\n", argv[0]);
         printf("示例: %s lan1 /www/iptv.m3u 3 239.81.0 239.81.1\n", argv[0]);
         return 1;
