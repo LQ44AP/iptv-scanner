@@ -10,7 +10,7 @@ define Package/iptv_scanner
   SECTION:=net
   CATEGORY:=Network
   TITLE:=IPTV Multicast Scanner
-  DEPENDS:=+libpcap +libstdcpp
+  DEPENDS:=+libpcap
 endef
 
 # 这里定义了如何编译源码
