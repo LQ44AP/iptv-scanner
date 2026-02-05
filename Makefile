@@ -13,9 +13,12 @@ define Package/iptv_scanner
   DEPENDS:=+libpcap +libstdcpp
 endef
 
-define Build/Prepare
-	mkdir -p $(PKG_BUILD_DIR)
-	$(CP) ./src/* $(PKG_BUILD_DIR)/
+# 这里定义了如何编译源码
+define Build/Compile
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) \
+		-o $(PKG_BUILD_DIR)/iptv_scanner \
+		src/iptv_scanner.c \
+		$(TARGET_LDFLAGS) -lpcap
 endef
 
 define Package/iptv_scanner/install
