@@ -12,34 +12,49 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 常见的 MT7621 架构 (mipsel)
+          # 小端序 (MT7621)
           - arch: mipsel_24kc
             target: ramips
             subtarget: mt7621
-            ver: 23.05.0
-          
-          # 常见的 Atheros 架构 (mips)
+          # 大端序 (Ath79)
           - arch: mips_24kc
             target: ath79
             subtarget: generic
-            ver: 23.05.0
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Build with OpenWrt SDK
-        uses: openwrt/gh-action-sdk@v1
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.ver }}
-          FEEDNAME: custom_feeds
-          # 注意：官方 Action 会寻找仓库根目录下的 Makefile
-          PACKAGES: iptv_scanner
-          NO_SIGNCHECK: true
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc wget unzip qemu-utils
+
+      - name: Download and Setup SDK
+        run: |
+          # 自动获取最新 23.05 版本的 SDK 下载链接
+          SDK_URL="https://downloads.openwrt.org/releases/23.05.0/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-23.05.0-${{ matrix.target }}-${{ matrix.subtarget }}_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+          wget $SDK_URL
+          tar -xJf *.tar.xz
+          mv openwrt-sdk-* openwrt-sdk
+
+      - name: Compile Package
+        run: |
+          cd openwrt-sdk
+          # 初始化 feeds 并将当前仓库代码放入 package 目录
+          mkdir -p package/iptv_scanner
+          cp -r ../src ../Makefile package/iptv_scanner/
+          
+          # 更新并安装必要的编译环境
+          ./scripts/feeds update -a
+          ./scripts/feeds install libpcap
+          
+          # 准备配置文件并编译
+          make defconfig
+          make package/iptv_scanner/compile V=s
 
       - name: Upload IPK
         uses: actions/upload-artifact@v4
         with:
           name: iptv_scanner-${{ matrix.arch }}
-          # 官方 Action 编译后的路径通常在 bin/packages/ 下
-          path: bin/packages/${{ matrix.arch }}/custom_feeds/*.ipk
+          path: openwrt-sdk/bin/packages/${{ matrix.arch }}/base/iptv_scanner*.ipk
