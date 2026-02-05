@@ -28,9 +28,6 @@ endef
 define Package/iptv-scanner/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/iptv_scanner $(1)/usr/bin/
-
-	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) ./files/iptv_scanner.config $(1)/etc/config/iptv_scanner
 endef
 
 $(eval $(call BuildPackage,iptv-scanner))
