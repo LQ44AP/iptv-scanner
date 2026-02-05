@@ -4,6 +4,7 @@
 
 
 
+
 扫不到请尝试：
 
 添加路由表：route add -net 224.0.0.0 netmask 240.0.0.0 dev lan1
