@@ -6,6 +6,6 @@
 
 扫不到请尝试：
 
-执行路由命令：route add -net 224.0.0.0 netmask 240.0.0.0 dev lan1
+添加路由命令：route add -net 224.0.0.0 netmask 240.0.0.0 dev lan1
 
 强制 IGMP V2：echo 2 > /proc/sys/net/ipv4/conf/lan1/force_igmp_version
