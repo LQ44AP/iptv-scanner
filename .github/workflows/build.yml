@@ -1,8 +1,11 @@
-name: Build Multi-Arch IPK
+name: Build and Release Multi-Arch IPK
 
 on:
   push:
-    tags: [ "v*" ] # 当推送以 v 开头的标签时触发发布
+    # 只有当推送的标签（tags）匹配 v* 时才运行
+    tags:
+      - 'v*'
+  # 保留手动触发，方便调试
   workflow_dispatch:
 
 jobs:
@@ -13,36 +16,39 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 常见的 CPU 架构列表
           - arch: x86_64
-            target: x86-64
+            target: x86/64
           - arch: mipsel_24kc
-            target: ramips-mt7621  # 斐讯K2P、小米R3G、大多数百兆/千兆宝盒
-          - arch: aarch64_generic
-            target: rockchip-armv8 # 友善 R2S/R4S、树莓派4/5
+            target: ramips/mt7621
           - arch: mips_24kc
-            target: ath79-generic  # TP-Link, 较旧的硬件
-          - arch: arm_cortex-a7_neon-vfpv4
-            target: ipq40xx-generic # 高通方案路由器
+            target: ath79/generic
+          - arch: aarch64_generic
+            target: rockchip/armv8
+          - arch: arm_cortex-a15_neon-vfpv4
+            target: bcm53xx/generic
 
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
 
       - name: Build IPK
-        uses: gh-action-community/openwrt-sdk-action@v1
+        uses: immortalwrt/gh-action-sdk@master
         with:
-          arch: ${{ matrix.target }}
-          version: 23.05.0 # 建议选择主流稳定的版本
+          architecture: ${{ matrix.target }}
+          version: 23.05.5
+          pkg_name: iptv-scanner
+          
+      - name: Organize Artifacts
+        run: |
+          mkdir -p ./bin_out
+          # 查找生成的 ipk 并根据架构重命名，防止文件名冲突
+          find bin/packages/ -name "iptv-scanner*.ipk" -exec cp {} ./bin_out/ \;
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptv-scanner-${{ matrix.arch }}
-          path: bin/packages/*/base/iptv-scanner*.ipk
-
-      - name: Create Release
-        if: github.event_name == 'push' && contains(github.ref, 'tags')
+      - name: Upload to Release
         uses: softprops/action-gh-release@v1
         with:
-          files: bin/packages/*/base/iptv-scanner*.ipk    
+          # 此处自动获取当前的 tag 名
+          files: ./bin_out/*.ipk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
