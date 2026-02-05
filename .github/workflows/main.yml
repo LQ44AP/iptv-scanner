@@ -5,6 +5,9 @@ on:
     tags: [ "v*" ]
   workflow_dispatch:
 
+permissions:
+  contents: write  
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -66,8 +69,32 @@ jobs:
           # 选定该包并执行编译
           make package/iptv_scanner/compile V=s -j$(nproc)
 
-      - name: Upload IPK
+      - name: Organize Files
+        run: |
+          mkdir -p ./deploy
+          # 将编译好的 ipk 复制到 deploy 目录，并重命名以区分架构
+          find openwrt-sdk/bin/packages/${{ matrix.arch }}/ -name "iptv_scanner*.ipk" -exec cp {} ./deploy/iptv_scanner_${{ matrix.arch }}.ipk \;
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: iptv_scanner-${{ matrix.arch }}
-          path: openwrt-sdk/bin/packages/${{ matrix.arch }}/**/*.ipk
+          path: ./deploy/*.ipk
+
+  publish:
+    needs: build # 等待所有架构编译完成
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') # 仅在有 tag 时运行
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-assets
+          merge-multiple: true # 将所有架构的 ipk 合并在一个文件夹
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release-assets/*.ipk
+          body: "IPTV 扫描器多架构自动编译版本。"
+          generate_release_notes: true # 自动生成更新日志
