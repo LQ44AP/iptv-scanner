@@ -2,33 +2,38 @@ name: Build for MIPS/MIPSEL
 
 on:
   push:
-    tags: [ "v*" ] # 当推送以 v 开头的标签时触发发布
+    tags: [ "v*" ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          # 小端序：大多数联发科路由器
+          # 常见的 MT7621 架构 (mipsel)
           - arch: mipsel_24kc
-            sdk_path: releases/23.05.0/targets/ramips/mt7621
+            target: ramips
+            subtarget: mt7621
+            ver: 23.05.0
           
-          # 大端序：大多数高通/阿瑟罗路由器
+          # 常见的 Atheros 架构 (mips)
           - arch: mips_24kc
-            sdk_path: releases/23.05.0/targets/ath79/generic
+            target: ath79
+            subtarget: generic
+            ver: 23.05.0
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Build with OpenWrt SDK
-        uses: gh-action-community/openwrt-sdk-action@v2
+        uses: openwrt/gh-action-sdk@v1
         env:
-          ARCH: ${{ matrix.arch }}
-          SDK_URL_PATH: ${{ matrix.sdk_path }} # 引用上面定义的路径
+          ARCH: ${{ matrix.arch }}-${{ matrix.ver }}
           FEEDNAME: custom_feeds
+          # 注意：官方 Action 会寻找仓库根目录下的 Makefile
           PACKAGES: iptv_scanner
           NO_SIGNCHECK: true
 
@@ -36,4 +41,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: iptv_scanner-${{ matrix.arch }}
+          # 官方 Action 编译后的路径通常在 bin/packages/ 下
           path: bin/packages/${{ matrix.arch }}/custom_feeds/*.ipk
