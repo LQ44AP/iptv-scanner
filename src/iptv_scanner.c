@@ -15,9 +15,9 @@ int g_wait_time = 2;
 int g_channel_count = 1;
 int g_link_offset = 14;    
 
-// 用于单次 IP 扫描中的端口去重
-uint16_t g_found_ports[64]; 
-int g_found_ports_count = 0;
+// 核心去重结构：用于在扫描当前IP时，记录已经发现并写入文件的端口
+uint16_t g_discovered_ports[128]; 
+int g_discovered_count = 0;
 
 void setup_link_offset(pcap_t *handle) {
     int link_type = pcap_datalink(handle);
@@ -34,23 +34,25 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
     int ip_header_len = ip_hdr->ip_hl * 4;
     const u_char *udp_ptr = packet + g_link_offset + ip_header_len;
     
-    // 提取端口
+    // 1. 提取目标端口
     uint16_t dport = ntohs(*(uint16_t *)(udp_ptr + 2));
     const u_char *payload = udp_ptr + 8;
     
-    // 端口去重检查
-    for (int i = 0; i < g_found_ports_count; i++) {
-        if (g_found_ports[i] == dport) return;
+    // 2. 检查该端口在当前 IP 扫描周期内是否已记录过
+    for (int i = 0; i < g_discovered_count; i++) {
+        if (g_discovered_ports[i] == dport) return; // 已记录，直接丢弃
     }
 
-    // RTP (0x80) 或 TS (0x47) 识别
+    // 3. 识别 RTP (0x80) 或 TS (0x47)
     if (payload[0] == 0x80 || payload[0] == 0x47) {
-        // 记录新发现的端口
-        if (g_found_ports_count < 64) {
-            g_found_ports[g_found_ports_count++] = dport;
+        // 记录到本次 IP 的发现池中
+        if (g_discovered_count < 128) {
+            g_discovered_ports[g_discovered_count++] = dport;
         }
 
         char *ip_str = inet_ntoa(ip_hdr->ip_dst);
+        
+        // 4. 打印并保存
         printf("[✔] 发现频道: %-15s  端口: %-5d  类型: %s\n", 
                ip_str, dport, (payload[0] == 0x80) ? "RTP" : "TS");
         
@@ -66,9 +68,9 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
     char mcast_ip[16];
     sprintf(mcast_ip, "%s.%d", prefix, last_byte);
     
-    // 重置当前 IP 的发现端口统计
-    g_found_ports_count = 0;
-    memset(g_found_ports, 0, sizeof(g_found_ports));
+    // 每个新 IP 开始扫描前，重置端口记录池
+    g_discovered_count = 0;
+    memset(g_discovered_ports, 0, sizeof(g_discovered_ports));
 
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     if (s < 0) return;
@@ -79,7 +81,7 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 
     if (setsockopt(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) == 0) {
         time_t start_time = time(NULL);
-        // 必须跑满 g_wait_time，不能提前 break
+        // 强制等待固定时长，捕获所有可能的端口包
         while (time(NULL) - start_time < g_wait_time) {
             pcap_dispatch(handle, -1, packet_handler, NULL);
             usleep(10000); 
@@ -91,8 +93,8 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 
 int main(int argc, char *argv[]) {
     if (argc < 5) {
-        printf("\nIPTV 全端口探测扫描器 (单线程模式)\n");
-        printf("用法: %s <网卡> <M3U保存路径> <每个IP等待秒数> <网段前缀1> [网段2...]\n", argv[0]);
+        printf("\nIPTV 全端口单线程去重扫描器\n");
+        printf("用法: %s <网卡> <M3U保存路径> <秒数> <前缀1> [前缀2...]\n", argv[0]);
         printf("示例: %s lan1 /www/iptv.m3u 3 239.81.0 239.81.1\n", argv[0]);
         return 1;
     }
@@ -103,20 +105,19 @@ int main(int argc, char *argv[]) {
     char errbuf[PCAP_ERRBUF_SIZE];
     
     fp_out = fopen(save_path, "w");
-    if (!fp_out) { perror("文件创建失败"); return 1; }
+    if (!fp_out) { perror("文件错误"); return 1; }
     fprintf(fp_out, "#EXTM3U\n");
 
     pcap_t *handle = pcap_create(dev, errbuf);
-    if (!handle) { fprintf(stderr, "pcap_create 失败: %s\n", errbuf); return 1; }
+    if (!handle) { return 1; }
     pcap_set_snaplen(handle, 128); 
     pcap_set_timeout(handle, 100); 
-    if (pcap_activate(handle) != 0) { fprintf(stderr, "激活失败: %s\n", pcap_geterr(handle)); return 1; }
+    if (pcap_activate(handle) != 0) { return 1; }
 
     setup_link_offset(handle);
     
-    printf("[*] 环境就绪: 链路类型 %s, 偏移 %d 字节\n", 
-           pcap_datalink_val_to_name(pcap_datalink(handle)), g_link_offset);
-    printf("[*] 模式: 全端口扫描 (每个IP将固定等待 %d 秒)\n", g_wait_time);
+    printf("[*] 环境就绪: 链路层偏移 %d 字节\n", g_link_offset);
+    printf("[*] 正在扫描... 每个IP将持续观察 %d 秒以捕获所有端口\n", g_wait_time);
     printf("----------------------------------------------------\n");
 
     for (int arg_idx = 4; arg_idx < argc; arg_idx++) {
@@ -127,7 +128,7 @@ int main(int argc, char *argv[]) {
     }
 
     printf("----------------------------------------------------\n");
-    printf("[*] 扫描完成！结果已存入: %s\n", save_path);
+    printf("[*] 扫描完成。结果: %s\n", save_path);
 
     pcap_close(handle);
     fclose(fp_out);
