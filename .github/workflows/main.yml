@@ -1,4 +1,4 @@
-name: Build for MIPS/MIPSEL
+name: Build for Multiple Archs
 
 on:
   push:
@@ -12,14 +12,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 小端序 (MT7621)
+          # 1. 小端序 MIPS (大多数联发科路由)
           - arch: mipsel_24kc
             target: ramips
             subtarget: mt7621
-          # 大端序 (Ath79)
+          # 2. 大端序 MIPS (高通/阿瑟罗路由)
           - arch: mips_24kc
             target: ath79
             subtarget: generic
+          # 3. x86-64 (软路由/虚拟机)
+          - arch: x86_64
+            target: x86
+            subtarget: 64
+          # 4. ARM64 (树莓派4, 5 / 友善 NanoPi)
+          - arch: aarch64_generic
+            target: rockchip
+            subtarget: armv8
 
     steps:
       - name: Checkout Code
@@ -32,45 +40,34 @@ jobs:
 
       - name: Download and Setup SDK
         run: |
-          # 1. 下载 SDK
-          SDK_URL="https://downloads.openwrt.org/releases/23.05.0/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-23.05.0-${{ matrix.target }}-${{ matrix.subtarget }}_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-          wget -q $SDK_URL
+          # 动态匹配 SDK 下载地址
+          # 注意：x86 和 arm64 的命名规则可能略有不同，这里使用通配符匹配
+          SDK_URL="https://downloads.openwrt.org/releases/23.05.0/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
+          # 获取该目录下第一个 SDK 文件的全名
+          SDK_FILE=$(wget -qO- $SDK_URL | grep -oE "openwrt-sdk-[^>]*Linux-x86_64.tar.xz" | head -n 1)
+          wget -q "${SDK_URL}${SDK_FILE}"
           
-          # 2. 解压
-          echo "正在解压 SDK..."
+          echo "正在解压: $SDK_FILE"
           tar -xJf *.tar.xz
           
-          # 3. 动态寻找解压出来的文件夹并重命名为 openwrt-sdk
-          # 使用 find 寻找包含 "sdk" 字样的目录，避免硬编码文件夹全名
           SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
-          if [ -d "$SDK_DIR" ]; then
-              mv "$SDK_DIR" openwrt-sdk
-              echo "成功找到并重命名 SDK 目录: $SDK_DIR"
-          else
-              echo "错误：未找到解压后的 SDK 目录！当前目录内容如下："
-              ls -F
-              exit 1
-          fi
+          mv "$SDK_DIR" openwrt-sdk
 
       - name: Compile Package
         run: |
           cd openwrt-sdk
-          # 创建包目录并复制源码
           mkdir -p package/iptv_scanner
           cp -r ../src ../Makefile package/iptv_scanner/
           
-          # 更新 feeds 并安装依赖库
           ./scripts/feeds update -a
           ./scripts/feeds install libpcap
           
-          # 生成默认配置并编译
-          # 使用 -j$(nproc) 加速编译，V=s 显示详细日志
           make defconfig
+          # 选定该包并执行编译
           make package/iptv_scanner/compile V=s -j$(nproc)
 
       - name: Upload IPK
         uses: actions/upload-artifact@v4
         with:
           name: iptv_scanner-${{ matrix.arch }}
-          # 这里的路径使用通配符，以防 custom_feeds 目录名有变
           path: openwrt-sdk/bin/packages/${{ matrix.arch }}/**/*.ipk
