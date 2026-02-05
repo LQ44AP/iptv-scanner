@@ -1,0 +1,48 @@
+name: Build Multi-Arch IPK
+
+on:
+  push:
+    tags: [ "v*" ] # 当推送以 v 开头的标签时触发发布
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build for ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 常见的 CPU 架构列表
+          - arch: x86_64
+            target: x86-64
+          - arch: mipsel_24kc
+            target: ramips-mt7621  # 斐讯K2P、小米R3G、大多数百兆/千兆宝盒
+          - arch: aarch64_generic
+            target: rockchip-armv8 # 友善 R2S/R4S、树莓派4/5
+          - arch: mips_24kc
+            target: ath79-generic  # TP-Link, 较旧的硬件
+          - arch: arm_cortex-a7_neon-vfpv4
+            target: ipq40xx-generic # 高通方案路由器
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Build IPK
+        uses: gh-action-community/openwrt-sdk-action@v1
+        with:
+          arch: ${{ matrix.target }}
+          version: 23.05.0 # 建议选择主流稳定的版本
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptv-scanner-${{ matrix.arch }}
+          path: bin/packages/*/base/iptv-scanner*.ipk
+
+      - name: Create Release
+        if: github.event_name == 'push' && contains(github.ref, 'tags')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bin/packages/*/base/iptv-scanner*.ipk    
