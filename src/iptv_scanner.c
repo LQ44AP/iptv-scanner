@@ -9,15 +9,21 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 
+// 结构体：记录唯一的 IP 和端口组合
+typedef struct {
+    uint32_t ip;
+    uint16_t port;
+} DiscoveredNode;
+
 // 全局变量
 FILE *fp_out = NULL;
 int g_wait_time = 2;       
 int g_channel_count = 1;
 int g_link_offset = 14;    
 
-// 核心去重结构：用于在扫描当前IP时，记录已经发现并写入文件的端口
-uint16_t g_discovered_ports[128]; 
-int g_discovered_count = 0;
+// 增加全局去重池，容量设大一些（支持发现1000个唯一频道）
+DiscoveredNode g_pool[1000];
+int g_pool_count = 0;
 
 void setup_link_offset(pcap_t *handle) {
     int link_type = pcap_datalink(handle);
@@ -34,25 +40,29 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
     int ip_header_len = ip_hdr->ip_hl * 4;
     const u_char *udp_ptr = packet + g_link_offset + ip_header_len;
     
-    // 1. 提取目标端口
+    // 1. 提取 IP 和 端口
+    uint32_t dest_ip = ip_hdr->ip_dst.s_addr;
     uint16_t dport = ntohs(*(uint16_t *)(udp_ptr + 2));
     const u_char *payload = udp_ptr + 8;
     
-    // 2. 检查该端口在当前 IP 扫描周期内是否已记录过
-    for (int i = 0; i < g_discovered_count; i++) {
-        if (g_discovered_ports[i] == dport) return; // 已记录，直接丢弃
+    // 2. 【硬核心逻辑】全局去重校验
+    // 检查这个 IP:Port 组合是否已经在全局池中
+    for (int i = 0; i < g_pool_count; i++) {
+        if (g_pool[i].ip == dest_ip && g_pool[i].port == dport) {
+            return; // 已经发现过，彻底忽略
+        }
     }
 
     // 3. 识别 RTP (0x80) 或 TS (0x47)
     if (payload[0] == 0x80 || payload[0] == 0x47) {
-        // 记录到本次 IP 的发现池中
-        if (g_discovered_count < 128) {
-            g_discovered_ports[g_discovered_count++] = dport;
+        // 4. 将新频道存入全局池
+        if (g_pool_count < 1000) {
+            g_pool[g_pool_count].ip = dest_ip;
+            g_pool[g_pool_count].port = dport;
+            g_pool_count++;
         }
 
         char *ip_str = inet_ntoa(ip_hdr->ip_dst);
-        
-        // 4. 打印并保存
         printf("[✔] 发现频道: %-15s  端口: %-5d  类型: %s\n", 
                ip_str, dport, (payload[0] == 0x80) ? "RTP" : "TS");
         
@@ -68,10 +78,6 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
     char mcast_ip[16];
     sprintf(mcast_ip, "%s.%d", prefix, last_byte);
     
-    // 每个新 IP 开始扫描前，重置端口记录池
-    g_discovered_count = 0;
-    memset(g_discovered_ports, 0, sizeof(g_discovered_ports));
-
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     if (s < 0) return;
 
@@ -81,9 +87,10 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 
     if (setsockopt(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) == 0) {
         time_t start_time = time(NULL);
-        // 强制等待固定时长，捕获所有可能的端口包
+        // 在等待时间内持续抓包
         while (time(NULL) - start_time < g_wait_time) {
-            pcap_dispatch(handle, -1, packet_handler, NULL);
+            // 参数 10 表示一次处理最多10个包，有助于快速去重
+            pcap_dispatch(handle, 10, packet_handler, NULL);
             usleep(10000); 
         }
         setsockopt(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
@@ -93,8 +100,8 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 
 int main(int argc, char *argv[]) {
     if (argc < 5) {
-        printf("\nIPTV 全端口单线程扫描器\n");
-        printf("用法: %s <网卡> <M3U保存路径> <秒数> <前缀1> [前缀2...]\n", argv[0]);
+        printf("\nIPTV 全局去重探测扫描器\n");
+        printf("用法: %s <网卡> <M3U保存路径> <等待秒数> <网段1> [网段2...]\n", argv[0]);
         printf("示例: %s lan1 /www/iptv.m3u 3 239.81.0 239.81.1\n", argv[0]);
         return 1;
     }
@@ -116,8 +123,12 @@ int main(int argc, char *argv[]) {
 
     setup_link_offset(handle);
     
-    printf("[*] 环境就绪: 链路层偏移 %d 字节\n", g_link_offset);
-    printf("[*] 正在扫描... 每个IP将持续观察 %d 秒以捕获所有端口\n", g_wait_time);
+    // 初始化全局池
+    memset(g_pool, 0, sizeof(g_pool));
+    g_pool_count = 0;
+
+    printf("[*] 环境就绪: 链路偏移 %d 字节\n", g_link_offset);
+    printf("[*] 开始扫描...\n");
     printf("----------------------------------------------------\n");
 
     for (int arg_idx = 4; arg_idx < argc; arg_idx++) {
@@ -128,7 +139,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("----------------------------------------------------\n");
-    printf("[*] 扫描完成。结果: %s\n", save_path);
+    printf("[*] 扫描完成。频道总数: %d\n", g_pool_count);
+    printf("[*] 结果保存至: %s\n", save_path);
 
     pcap_close(handle);
     fclose(fp_out);
