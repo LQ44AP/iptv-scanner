@@ -1,4 +1,3 @@
-# 这里的 $(CC) 和 $(LDFLAGS) 由 OpenWrt SDK 自动注入
 all: iptv_scanner
 
 iptv_scanner: iptv_fast_scan.o
