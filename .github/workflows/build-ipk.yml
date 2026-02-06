@@ -62,7 +62,7 @@ jobs:
           mkdir -p package/iptv_scanner
           cp -r ../src ../Makefile package/iptv_scanner/
           
-          ./scripts/feeds update -a
+          ./scripts/feeds update -a || true
           ./scripts/feeds install libpcap
           
           make defconfig
