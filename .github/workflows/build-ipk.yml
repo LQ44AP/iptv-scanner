@@ -97,4 +97,4 @@ jobs:
         with:
           files: ./release-assets/*.ipk
           body: "IPTV 扫描器多架构自动编译版本。"
-          generate_release_notes: true # 自动生成更新日志
+
