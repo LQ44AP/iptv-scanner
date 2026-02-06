@@ -115,7 +115,7 @@ int main(int argc, char *argv[]) {
     if (argc < 5) {
         printf("\nIPTV 严格去重探测扫描器\n");
         printf("用法: %s <网卡> <M3U保存路径> <等待秒数> <网段1> [网段2...]\n", argv[0]);
-        printf("示例: %s lan1 /www/iptv.m3u 2 239.81.0 239.81.1\n", argv[0]);
+        printf("示例: %s lan1 /www/iptv.m3u 3 239.81.0 239.81.1\n", argv[0]);
         return 1;
     }
 
