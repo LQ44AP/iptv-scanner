@@ -102,6 +102,7 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 
     if (setsockopt(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) == 0) {
         time_t start_time = time(NULL);
+        // 等待期间多次尝试派发包处理，增加命中率
         while (time(NULL) - start_time < g_wait_time) {
             pcap_dispatch(handle, -1, packet_handler, NULL);
             usleep(20000); 
