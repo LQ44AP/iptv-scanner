@@ -45,7 +45,7 @@ jobs:
         run: |
           # 动态匹配 SDK 下载地址
           # 注意：x86 和 arm64 的命名规则可能略有不同，这里使用通配符匹配
-          SDK_URL="https://downloads.openwrt.org/releases/23.05.0/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
+          SDK_URL="https://downloads.openwrt.org/releases/23.05.5/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
           # 获取该目录下第一个 SDK 文件的全名
           SDK_FILE=$(wget -qO- $SDK_URL | grep -oE "openwrt-sdk-[^>]*Linux-x86_64.tar.xz" | head -n 1)
           wget -q "${SDK_URL}${SDK_FILE}"
