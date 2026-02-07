@@ -86,4 +86,3 @@ jobs:
           files: ./release-assets/*.ipk
           # 【优化】Release 的标题会自动使用 tag 名字，正文手动注明是 Full 版
           body: "IPTV 扫描器多架构 (Full版) 自动编译发布。"
-          generate_release_notes: false
