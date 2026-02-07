@@ -75,7 +75,7 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
         while (time(NULL) - start_time < g_wait_time) {
             pcap_dispatch(handle, -1, packet_handler, NULL);
             if (global_found[last_byte]) break;
-            usleep(10000); // 10ms 轮询频率
+            usleep(20000); // 20ms 轮询频率
         }
         setsockopt(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
     }
