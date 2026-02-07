@@ -2,7 +2,7 @@ name: Build for Multiple Archs
 
 on:
   push:
-    tags: [ "v*" ]
+    tags: [ "v*-full" ]
   workflow_dispatch:
 
 permissions:
@@ -73,7 +73,7 @@ jobs:
         run: |
           mkdir -p ./deploy
           # 将编译好的 ipk 复制到 deploy 目录，并重命名以区分架构
-          find openwrt-sdk/bin/packages/${{ matrix.arch }}/ -name "iptv_scanner*.ipk" -exec cp {} ./deploy/iptv_scanner_${{ matrix.arch }}.ipk \;
+          find openwrt-sdk/bin/packages/${{ matrix.arch }}/ -name "iptv_scanner*.ipk" -exec cp {} ./deploy/iptv_scanner_${{ matrix.arch }}_full.ipk \;
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -97,4 +97,4 @@ jobs:
         with:
           files: ./release-assets/*.ipk
           body: "IPTV 扫描器多架构自动编译版本。"
-          generate_release_notes: true # 自动生成更新日志
+          generate_release_notes: false # 自动生成更新日志
