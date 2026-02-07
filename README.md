@@ -1,3 +1,5 @@
+全自动盲扫
+
 用法: iptv_scanner <网卡> <M3U保存路径> <等待秒> 
 
 示例: iptv_scanner lan1 /tmp/iptv.m3u 1
