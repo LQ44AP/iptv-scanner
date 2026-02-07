@@ -70,7 +70,8 @@ void* sniffer_worker(void* arg) {
 
 int main(int argc, char *argv[]) {
     if (argc < 4) {
-        printf("用法: %s <网卡> <M3U路径> <秒数>\n", argv[0]);
+        printf("用法: %s <网卡> <M3U保存路径> <秒数>\n", argv[0]);
+        printf("示例: %s eth0 /tmp/iptv.m3u 2\n", argv[0]);
         return 1;
     }
 
