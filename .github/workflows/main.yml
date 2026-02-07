@@ -73,12 +73,12 @@ jobs:
         run: |
           mkdir -p ./deploy
           # 将编译好的 ipk 复制到 deploy 目录，并重命名以区分架构
-          find openwrt-sdk/bin/packages/${{ matrix.arch }}/ -name "iptv_scanner*.ipk" -exec cp {} ./deploy/iptv_scanner_${{ matrix.arch }}_full.ipk \;
+          find openwrt-sdk/bin/packages/${{ matrix.arch }} -name "iptv_scanner*.ipk" -exec cp {} ./deploy/iptv_scanner_${{ matrix.arch }}_full.ipk \;
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: iptv_scanner-${{ matrix.arch }}
+          name: iptv_scanner-${{ matrix.arch }}-full
           path: ./deploy/*.ipk
 
   publish:
