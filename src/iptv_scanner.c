@@ -108,7 +108,7 @@ int main(int argc, char *argv[]) {
     setup_link_offset(handle);
     
     printf("[*] 开始全量盲扫 (239.0.0.x - 239.255.255.x)\n");
-    printf("[*] 策略: 每段前50个IP无信号则跳过该段\n");
+    printf("[*] 策略: 每段前20个IP无信号则跳过该段\n");
     printf("----------------------------------------------------\n");
 
     char prefix[20];
@@ -123,7 +123,7 @@ int main(int argc, char *argv[]) {
 
             for (int i = 1; i <= 254; i++) {
                 // 核心逻辑：前 50 个 IP 探测
-                if (i > 50 && found_in_current_segment == 0) {
+                if (i > 20 && found_in_current_segment == 0) {
                     break; // 跳出当前 C 段
                 }
 
