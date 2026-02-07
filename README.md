@@ -2,13 +2,13 @@
 
 用法: iptv_scanner <网卡> <M3U保存路径> <等待秒> 
 
-示例: iptv_scanner lan1 /tmp/iptv.m3u 1
+示例: iptv_scanner eth0 /tmp/iptv.m3u 1
 
 
 
 
 扫不到请尝试：
 
-添加路由表：route add -net 224.0.0.0 netmask 240.0.0.0 dev lan1
+添加路由表：route add -net 224.0.0.0 netmask 240.0.0.0 dev eth0
 
-强制 IGMP V2：echo 2 > /proc/sys/net/ipv4/conf/lan1/force_igmp_version
+强制 IGMP V2：echo 2 > /proc/sys/net/ipv4/conf/eth0/force_igmp_version
