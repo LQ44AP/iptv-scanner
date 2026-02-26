@@ -16,6 +16,9 @@
 #define NAME_LEN 128
 #define IP_PORT_LEN 32
 
+#define MAX_CITIES 1024
+#define CITY_NAME_LEN 64
+
 typedef struct {
     char ip[16];
     int port;
@@ -38,7 +41,7 @@ channel_t channels[MAX_CHANNELS];
 int channel_count = 0;
 dict_entry_t dict[1024];
 int dict_size = 0;
-char cities[256][32];
+char cities[MAX_CITIES][CITY_NAME_LEN];
 int city_count = 0;
 
 // 可配置变量
@@ -136,17 +139,17 @@ int load_cities(const char *path) {
         fprintf(stderr, "[警告] 城市列表文件不存在: %s\n", path);
         return 0;
     }
-    char line[64];
+    char line[128];  // 适当增大缓冲区
     while (fgets(line, sizeof(line), f)) {
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
         char *end = p + strlen(p) - 1;
         while (end > p && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t')) *end-- = '\0';
         if (strlen(p) == 0) continue;
-        strncpy(cities[city_count], p, 31);
-        cities[city_count][31] = '\0';
+        strncpy(cities[city_count], p, CITY_NAME_LEN-1);
+        cities[city_count][CITY_NAME_LEN-1] = '\0';
         city_count++;
-        if (city_count >= 256) break;
+        if (city_count >= MAX_CITIES) break;
     }
     fclose(f);
     printf("[系统] 已加载城市关键词: %d 个\n", city_count);
