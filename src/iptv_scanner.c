@@ -214,9 +214,9 @@ void clean_name(const char *src, char *dst) {
 
     // 保护特殊词（简化版）
     char *p;
-    if ((p = strstr(temp, "CCTV4K")) != NULL) memcpy(p, "PROTECT4K", 9);
-    if ((p = strstr(temp, "CCTV5+")) != NULL) memcpy(p, "PROTECT5+", 9);
-    if ((p = strstr(temp, "爱上4K")) != NULL) memcpy(p, "PROLOVE4K", 9);
+    if ((p = strstr(temp, "CCTV4K")) != NULL) memcpy(p, "PROTECTAA", 9);
+    if ((p = strstr(temp, "CCTV5+")) != NULL) memcpy(p, "PROTECTBB", 9);
+    if ((p = strstr(temp, "爱上4K")) != NULL) memcpy(p, "PROLOVECC", 9);
     if ((p = strstr(temp, "茶频道")) != NULL) memcpy(p, "PROTEA", 6);
 
     const char *remove_words[] = {"奥林匹克", "超高清", "高清", "标清", "频道", "字幕", "UHD", "FHD", "4K", "8K", "HD", NULL};
@@ -241,9 +241,9 @@ void clean_name(const char *src, char *dst) {
     result[j] = '\0';
 
     // 恢复保护词
-    if ((p = strstr(result, "PROTECT4K")) != NULL) memcpy(p, "CCTV4K", 6);
-    if ((p = strstr(result, "PROTECT5+")) != NULL) memcpy(p, "CCTV5+", 6);
-    if ((p = strstr(result, "PROLOVE4K")) != NULL) memcpy(p, "爱上4K", 6);
+    if ((p = strstr(result, "PROTECTAA")) != NULL) memcpy(p, "CCTV4K", 6);
+    if ((p = strstr(result, "PROTECTBB")) != NULL) memcpy(p, "CCTV5+", 6);
+    if ((p = strstr(result, "PROLOVECC")) != NULL) memcpy(p, "爱上4K", 6);
     if ((p = strstr(result, "PROTEA")) != NULL) memcpy(p, "茶频道", 6);
 
     strncpy(dst, result, NAME_LEN-1);
