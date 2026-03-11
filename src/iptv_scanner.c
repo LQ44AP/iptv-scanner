@@ -380,7 +380,7 @@ int main(int argc, char *argv[]) {
     }
     
     // 打开日志文件
-    log_file = fopen("scan.log", "a");
+    log_file = fopen("/tmp/iptv_scan.log", "a");
     if (!log_file) {
         printf("警告：无法创建日志文件，仅输出到控制台\n");
     } else {
