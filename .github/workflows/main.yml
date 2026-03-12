@@ -103,9 +103,4 @@ jobs:
           files: ./release-assets/*.ipk
           body: |
             ## IPTV 扫描器多架构自动编译版本
-
-            - OpenWrt 版本: ${{ env.OPENWRT_VERSION }}
-            - 包含架构: mipsel_24kc, mips_24kc, x86_64, aarch64_generic
-
-            如需其他架构请提交 Issue。
           generate_release_notes: false
