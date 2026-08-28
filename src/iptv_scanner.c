@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-#define __FAVOR_BSD
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -206,7 +204,7 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
 
     struct udphdr *udp_hdr = (struct udphdr *)udp_ptr;
     uint32_t dest_ip = ip_hdr->ip_dst.s_addr;
-    uint16_t dport_net = udp_hdr->dest; // 目的端口的网络字节序
+    uint16_t dport_net = udp_hdr->uh_dport; // 目的端口的网络字节序
     
     // 3. 识别有效载荷
     int payload_len = header->caplen - (g_link_offset + ip_header_len + sizeof(struct udphdr));
