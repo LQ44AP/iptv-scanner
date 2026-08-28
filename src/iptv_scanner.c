@@ -81,7 +81,7 @@ void log_message(const char *format, ...) {
     
     if (log_file) {
         fprintf(log_file, "[%s] ", get_current_time());
-        vfprintf(log_file, args_copy, args_copy);
+        vfprintf(log_file, format, args_copy); // 修复: 第二个参数传入格式化字符串
         fflush(log_file);
     }
     va_end(args_copy);
@@ -107,7 +107,7 @@ int is_duplicate(uint32_t ip, uint16_t port) {
     HashNode *new_node = (HashNode*)malloc(sizeof(HashNode));
     if (!new_node) {
         log_message("警告: 哈希节点内存分配失败\n");
-        return 1; // 内存分配失败时当作重复处理，防止数据结构崩溃
+        return 1; // 内存分配失败时当作重复处理，防止崩溃
     }
     new_node->key = key;
     new_node->next = hash_table[index];
@@ -277,7 +277,7 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
 
 // ==================== 单 IP 扫描函数 ====================
 void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
-    char mcast_ip[32]; // 扩大缓冲区大小防止溢出
+    char mcast_ip[32];
     snprintf(mcast_ip, sizeof(mcast_ip), "%s.%d", prefix, last_byte);
     
     int s = socket(AF_INET, SOCK_DGRAM, 0);
@@ -317,12 +317,12 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 // ==================== 参数验证函数 ====================
 int validate_arguments(int argc, char *argv[]) {
     if (argc < 5) {
-        printf("\nIPTV 严格去重探测扫描器 - 增强修复版 (支持VLAN/QinQ)\n");
+        printf("\nIPTV 严格去重探测扫描器 - 增强修复版 (支持VLAN/BPF过滤)\n");
         printf("用法: %s <网卡> <M3U保存路径> <等待秒数> <网段1> [网段2...]\n", argv[0]);
         printf("示例: %s eth0 /tmp/iptv.m3u 2 239.81.0 239.81.1\n\n", argv[0]);
         printf("参数说明:\n");
         printf("  网卡:         网络接口名称 (使用 ifconfig 查看)\n");
-        printf("  M3U保存路径: Output M3U 文件路径\n");
+        printf("  M3U保存路径: 输出 M3U 文件路径\n");
         printf("  等待秒数:     每个多播地址监听时间(1-60秒)\n");
         printf("  网段:         多播网段，如239.81.0 (支持1-10个)\n");
         return 0;
@@ -421,6 +421,20 @@ int main(int argc, char *argv[]) {
     
     if (pcap_setnonblock(handle, 1, errbuf) < 0) {
         log_message("设置非阻塞模式警告: %s\n", errbuf);
+    }
+
+    // 设置 BPF 硬件/内核级数据包过滤器
+    struct bpf_program fp;
+    char filter[] = "udp and dst net 224.0.0.0/4";
+    if (pcap_compile(handle, &fp, filter, 0, PCAP_NETMASK_UNKNOWN) == 0) {
+        if (pcap_setfilter(handle, &fp) < 0) {
+            log_message("设置 BPF 过滤器失败: %s\n", pcap_geterr(handle));
+        } else {
+            log_message("BPF 过滤器生效: %s\n", filter);
+        }
+        pcap_freecode(&fp);
+    } else {
+        log_message("编译 BPF 过滤器失败: %s\n", pcap_geterr(handle));
     }
     
     setup_link_offset(handle);
