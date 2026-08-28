@@ -18,6 +18,7 @@
 #define HASH_TABLE_SIZE 4096
 #define MAX_LINE_LEN 256
 #define MAX_NETWORKS 10
+#define ETHERTYPE_VLAN 0x8100   // VLAN 标签 EtherType
 
 // 结构体：记录唯一的 IP 和端口组合
 typedef struct {
@@ -49,7 +50,8 @@ static FILE *fp_out = NULL;
 static FILE *log_file = NULL;
 static int g_wait_time = 2;
 static int g_channel_count = 1;
-static int g_link_offset = 14;
+static int g_link_offset = 14;      // 基础链路层偏移（不含 VLAN）
+static int g_link_type = -1;        // 链路层类型，用于 VLAN 检测
 static ScanStats g_stats = {0};
 
 // 发现节点池和哈希表
@@ -69,13 +71,11 @@ char* get_current_time() {
 void log_message(const char *format, ...) {
     va_list args;
     
-    // 输出到控制台
     va_start(args, format);
     printf("[%s] ", get_current_time());
     vprintf(format, args);
     va_end(args);
     
-    // 输出到日志文件
     if (log_file) {
         va_start(args, format);
         fprintf(log_file, "[%s] ", get_current_time());
@@ -102,7 +102,6 @@ int is_duplicate(uint32_t ip, uint16_t port) {
         node = node->next;
     }
     
-    // 添加到哈希表
     HashNode *new_node = (HashNode*)malloc(sizeof(HashNode));
     if (!new_node) {
         log_message("内存分配失败\n");
@@ -134,26 +133,18 @@ void free_hash_table() {
 // ==================== 协议检测函数 ====================
 int is_valid_rtp(const u_char *payload, int payload_len) {
     if (payload_len < 12) return 0;
-    
-    // RTP 版本号必须为 2 (最高2位为 10)
     if ((payload[0] & 0xC0) != 0x80) return 0;
-    
-    // 有效载荷类型应在合理范围内 (0-127)
     if ((payload[1] & 0x7F) > 127) return 0;
-    
     return 1;
 }
 
 int is_valid_ts(const u_char *payload, int payload_len) {
     if (payload_len < 188) return 0;
-    
-    // 连续检查最多 3 个 TS 包头同步字节 (0x47)，步长为 188 字节
     int checked_count = 0;
     for (int offset = 0; offset + 188 <= payload_len && checked_count < 3; offset += 188) {
         if (payload[offset] != 0x47) return 0;
         checked_count++;
     }
-    
     return checked_count > 0;
 }
 
@@ -165,49 +156,59 @@ void signal_handler(int signum) {
 
 // ==================== 链路层偏移设置 ====================
 void setup_link_offset(pcap_t *handle) {
-    int link_type = pcap_datalink(handle);
-    switch (link_type) {
+    g_link_type = pcap_datalink(handle);
+    switch (g_link_type) {
         case DLT_EN10MB:      g_link_offset = 14; break;
         case DLT_LINUX_SLL:   g_link_offset = 16; break;
         case DLT_NULL:        g_link_offset = 4;  break;
         case DLT_RAW:         g_link_offset = 0;  break;
         default:              
-            log_message("未知链路层类型: %d，使用默认偏移14\n", link_type);
+            log_message("未知链路层类型: %d，使用默认偏移14\n", g_link_type);
             g_link_offset = 14;
     }
-    log_message("链路层偏移设置为: %d\n", g_link_offset);
+    log_message("链路层偏移设置为: %d (基础偏移，VLAN动态处理)\n", g_link_offset);
 }
 
 // ==================== 数据包处理函数 ====================
 void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
     g_stats.total_packets++;
     
+    // ----- 动态计算实际链路层偏移（支持 VLAN） -----
+    int offset = g_link_offset;
+    if (g_link_type == DLT_EN10MB && header->caplen >= 14) {
+        // 读取以太网类型字段（偏移12~13）
+        uint16_t eth_type = (packet[12] << 8) | packet[13];
+        if (eth_type == ETHERTYPE_VLAN) {
+            offset += 4;   // 跳过 4 字节 VLAN 标签（含 TCI）
+            // 注：如果存在 QinQ（双层VLAN），可继续检查，但此处简化处理
+        }
+    }
+    
     // 1. 安全边界检查：确保包长足够容纳链路层 + IP头
-    if (header->caplen < g_link_offset + sizeof(struct ip)) {
+    if (header->caplen < offset + sizeof(struct ip)) {
         g_stats.invalid_packets++;
         return;
     }
 
-    struct ip *ip_hdr = (struct ip *)(packet + g_link_offset);
+    struct ip *ip_hdr = (struct ip *)(packet + offset);
     
-    // 检查 IP 版本与协议
     if (ip_hdr->ip_v != 4 || ip_hdr->ip_p != IPPROTO_UDP) return;
 
     int ip_header_len = ip_hdr->ip_hl * 4;
-    const u_char *udp_ptr = packet + g_link_offset + ip_header_len;
+    const u_char *udp_ptr = packet + offset + ip_header_len;
     
     // 2. 安全边界检查：确保 UDP 头部完全可读
-    if (header->caplen < (g_link_offset + ip_header_len + sizeof(struct udphdr))) {
+    if (header->caplen < (offset + ip_header_len + sizeof(struct udphdr))) {
         g_stats.invalid_packets++;
         return;
     }
 
     struct udphdr *udp_hdr = (struct udphdr *)udp_ptr;
     uint32_t dest_ip = ip_hdr->ip_dst.s_addr;
-    uint16_t dport_net = udp_hdr->uh_dport; // 目的端口的网络字节序
+    uint16_t dport_net = udp_hdr->uh_dport;
     
     // 3. 识别有效载荷
-    int payload_len = header->caplen - (g_link_offset + ip_header_len + sizeof(struct udphdr));
+    int payload_len = header->caplen - (offset + ip_header_len + sizeof(struct udphdr));
     if (payload_len <= 0) {
         g_stats.invalid_packets++;
         return;
@@ -222,17 +223,15 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
         is_ts = 1;
     }
     
-    // 如果不是有效的 RTP 或 TS 数据流，直接丢弃，不加入哈希表
     if (!is_rtp && !is_ts) {
         return;
     }
 
-    // 4. 全局去重校验（仅针对有效流节点）
+    // 4. 全局去重校验
     if (is_duplicate(dest_ip, dport_net)) {
         return;
     }
 
-    // 更新协议统计数
     if (is_rtp) g_stats.rtp_packets++;
     if (is_ts)  g_stats.ts_packets++;
 
@@ -298,10 +297,9 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
         time_t start_time = time(NULL);
         log_message("开始监听多播组: %s\n", mcast_ip);
         
-        // 轮询抓包
         while (time(NULL) - start_time < g_wait_time && !stop_flag) {
             pcap_dispatch(handle, 100, packet_handler, NULL);
-            usleep(20000); // 20ms
+            usleep(20000);
         }
         
         setsockopt(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
@@ -316,7 +314,7 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 // ==================== 参数验证函数 ====================
 int validate_arguments(int argc, char *argv[]) {
     if (argc < 5) {
-        printf("\nIPTV 严格去重探测扫描器 - 增强版\n");
+        printf("\nIPTV 严格去重探测扫描器 - 增强版 (支持VLAN)\n");
         printf("用法: %s <网卡> <M3U保存路径> <等待秒数> <网段1> [网段2...]\n", argv[0]);
         printf("示例: %s eth0 /tmp/iptv.m3u 2 239.81.0 239.81.1\n\n", argv[0]);
         printf("参数说明:\n");
@@ -327,14 +325,12 @@ int validate_arguments(int argc, char *argv[]) {
         return 0;
     }
     
-    // 检查等待时间
     g_wait_time = atoi(argv[3]);
     if (g_wait_time <= 0 || g_wait_time > 60) {
         printf("错误：等待时间应在1-60秒之间\n");
         return 0;
     }
     
-    // 检查网段格式
     int valid_networks = 0;
     for (int i = 4; i < argc && i < 4 + MAX_NETWORKS; i++) {
         int a, b, c;
@@ -374,16 +370,13 @@ void print_statistics() {
 int main(int argc, char *argv[]) {
     time_t start_time = time(NULL);
     
-    // 注册信号处理器
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
-    // 验证参数
     if (!validate_arguments(argc, argv)) {
         return 1;
     }
     
-    // 打开日志文件
     log_file = fopen("/tmp/iptv_scan.log", "a");
     if (!log_file) {
         printf("警告：无法创建日志文件，仅输出到控制台\n");
@@ -391,7 +384,6 @@ int main(int argc, char *argv[]) {
         fprintf(log_file, "\n======= IPTV扫描开始于 %s =======\n", get_current_time());
     }
     
-    // 打开输出文件
     fp_out = fopen(argv[2], "w");
     if (!fp_out) {
         log_message("无法创建输出文件: %s (%s)\n", argv[2], strerror(errno));
@@ -402,7 +394,6 @@ int main(int argc, char *argv[]) {
     fprintf(fp_out, "# Generated by IPTV Scanner at %s\n", get_current_time());
     fprintf(fp_out, "# Format: EXTINF line shows IP:Port\n");
     
-    // 初始化 pcap
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle = pcap_create(argv[1], errbuf);
     if (!handle) {
@@ -412,11 +403,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // 设置 pcap 参数
-    pcap_set_snaplen(handle, 256);                  // 抓取足够头部
-    pcap_set_promisc(handle, 0);                    // 非混杂模式
-    pcap_set_timeout(handle, 100);                  // 100ms 超时
-    pcap_set_buffer_size(handle, 8 * 1024 * 1024);   // 8MB 缓冲区
+    pcap_set_snaplen(handle, 256);
+    pcap_set_promisc(handle, 0);
+    pcap_set_timeout(handle, 100);
+    pcap_set_buffer_size(handle, 8 * 1024 * 1024);
     
     if (pcap_activate(handle) != 0) {
         log_message("激活pcap失败: %s\n", pcap_geterr(handle));
@@ -426,15 +416,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // 设置非阻塞模式，防止 pcap_dispatch 卡顿
     if (pcap_setnonblock(handle, 1, errbuf) < 0) {
         log_message("设置非阻塞模式警告: %s\n", errbuf);
     }
     
-    // 设置链路层偏移
     setup_link_offset(handle);
     
-    // 初始化数据结构
     memset(g_pool, 0, sizeof(g_pool));
     memset(&g_stats, 0, sizeof(g_stats));
     
@@ -446,7 +433,6 @@ int main(int argc, char *argv[]) {
     printf("\n[*] 正在扫描网段，按 Ctrl+C 停止...\n");
     printf("----------------------------------------------------\n");
     
-    // 开始扫描
     for (int arg_idx = 4; arg_idx < argc && !stop_flag; arg_idx++) {
         log_message("开始扫描网段: %s\n", argv[arg_idx]);
         
@@ -459,11 +445,9 @@ int main(int argc, char *argv[]) {
         strncpy(prefix, argv[arg_idx], sizeof(prefix) - 1);
         prefix[sizeof(prefix) - 1] = '\0';
         
-        // 扫描该网段的 254 个地址
         for (int i = 1; i <= 254 && !stop_flag; i++) {
             scan_single_ip(handle, prefix, i);
             
-            // 每扫描 10 个地址输出一次进度
             if (i % 10 == 0) {
                 printf("进度: %s.%d (%d/254) - 已发现频道: %d\r", 
                        prefix, i, i, g_stats.unique_channels);
@@ -477,13 +461,11 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // 清理资源
     printf("\n----------------------------------------------------\n");
     
     time_t end_time = time(NULL);
     double elapsed = difftime(end_time, start_time);
     
-    // 输出 M3U 文件尾
     if (fp_out) {
         fprintf(fp_out, "# Total channels: %d\n", g_channel_count - 1);
         fprintf(fp_out, "# Scan time: %.1f seconds\n", elapsed);
@@ -491,14 +473,11 @@ int main(int argc, char *argv[]) {
         fp_out = NULL;
     }
     
-    // 打印统计信息
     print_statistics();
     
-    // 输出到日志
     log_message("扫描完成，耗时 %.1f 秒\n", elapsed);
     log_message("发现唯一频道数: %d\n", g_stats.unique_channels);
     
-    // 释放资源
     free_hash_table();
     pcap_close(handle);
     
