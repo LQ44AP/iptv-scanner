@@ -110,11 +110,11 @@ int is_duplicate(uint32_t ip, uint16_t port) {
     }
     new_node->key = key;
     new_node->next = hash_table[index];
-    hash_table[index] = new_node;
     
-    if (hash_table[index] && hash_table[index]->next) {
+    if (hash_table[index] != NULL) {
         g_stats.hash_collisions++;
     }
+    hash_table[index] = new_node;
     
     return 0;
 }
@@ -135,10 +135,10 @@ void free_hash_table() {
 int is_valid_rtp(const u_char *payload, int payload_len) {
     if (payload_len < 12) return 0;
     
-    // RTP版本应为2
+    // RTP 版本号必须为 2 (最高2位为 10)
     if ((payload[0] & 0xC0) != 0x80) return 0;
     
-    // 有效载荷类型应在合理范围内（0-127）
+    // 有效载荷类型应在合理范围内 (0-127)
     if ((payload[1] & 0x7F) > 127) return 0;
     
     return 1;
@@ -147,12 +147,14 @@ int is_valid_rtp(const u_char *payload, int payload_len) {
 int is_valid_ts(const u_char *payload, int payload_len) {
     if (payload_len < 188) return 0;
     
-    // 检查同步字节
-    if (payload[0] != 0x47) return 0;
+    // 连续检查最多 3 个 TS 包头同步字节 (0x47)，步长为 188 字节
+    int checked_count = 0;
+    for (int offset = 0; offset + 188 <= payload_len && checked_count < 3; offset += 188) {
+        if (payload[offset] != 0x47) return 0;
+        checked_count++;
+    }
     
-    // 可以进一步检查连续几个包是否有正确的同步字节
-    // 这里简化处理，只检查第一个字节
-    return 1;
+    return checked_count > 0;
 }
 
 // ==================== 信号处理函数 ====================
@@ -188,88 +190,90 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
 
     struct ip *ip_hdr = (struct ip *)(packet + g_link_offset);
     
-    // 检查IP版本
-    if (ip_hdr->ip_v != 4) return;
-    
-    // 只处理UDP包
-    if (ip_hdr->ip_p != IPPROTO_UDP) return;
+    // 检查 IP 版本与协议
+    if (ip_hdr->ip_v != 4 || ip_hdr->ip_p != IPPROTO_UDP) return;
 
     int ip_header_len = ip_hdr->ip_hl * 4;
     const u_char *udp_ptr = packet + g_link_offset + ip_header_len;
     
-    // 2. 安全边界检查：确保UDP端口字段可读
-    if (header->caplen < (g_link_offset + ip_header_len + 4)) {
+    // 2. 安全边界检查：确保 UDP 头部完全可读
+    if (header->caplen < (g_link_offset + ip_header_len + sizeof(struct udphdr))) {
         g_stats.invalid_packets++;
         return;
     }
 
-    // 提取IP和端口(保持网络字节序用于去重池比对)
+    struct udphdr *udp_hdr = (struct udphdr *)udp_ptr;
     uint32_t dest_ip = ip_hdr->ip_dst.s_addr;
-    uint16_t dport_net = *(uint16_t *)(udp_ptr + 2); // 目的端口的网络字节序
+    uint16_t dport_net = udp_hdr->dest; // 目的端口的网络字节序
     
-    // 3. 全局去重校验
-    if (is_duplicate(dest_ip, dport_net)) {
-        return;
-    }
-
-    // 4. 识别有效载荷
-    int payload_len = header->caplen - (g_link_offset + ip_header_len + 8);
+    // 3. 识别有效载荷
+    int payload_len = header->caplen - (g_link_offset + ip_header_len + sizeof(struct udphdr));
     if (payload_len <= 0) {
         g_stats.invalid_packets++;
         return;
     }
     
-    const u_char *payload = udp_ptr + 8;
+    const u_char *payload = udp_ptr + sizeof(struct udphdr);
     int is_rtp = 0, is_ts = 0;
     
     if (payload_len >= 12 && is_valid_rtp(payload, payload_len)) {
         is_rtp = 1;
-        g_stats.rtp_packets++;
     } else if (payload_len >= 188 && is_valid_ts(payload, payload_len)) {
         is_ts = 1;
-        g_stats.ts_packets++;
     }
     
-    if (is_rtp || is_ts) {
-        // 存入全局池
-        if (g_pool_count < MAX_POOL_SIZE) {
-            g_pool[g_pool_count].ip = dest_ip;
-            g_pool[g_pool_count].port = dport_net;
-            g_pool[g_pool_count].proto_type = is_rtp ? 0 : 1;
-            g_pool_count++;
-            g_stats.unique_channels++;
-        } else {
-            static int warned = 0;
-            if (!warned) {
-                log_message("警告：节点池已满（%d个），后续节点将被忽略\n", MAX_POOL_SIZE);
-                warned = 1;
-            }
-            return;
-        }
+    // 如果不是有效的 RTP 或 TS 数据流，直接丢弃，不加入哈希表
+    if (!is_rtp && !is_ts) {
+        return;
+    }
 
-        // 输出发现的信息
-        char ip_str[INET_ADDRSTRLEN]; 
-        if (inet_ntop(AF_INET, &dest_ip, ip_str, sizeof(ip_str)) == NULL) {
-            strcpy(ip_str, "无效IP");
-        }
-        
-        uint16_t dport_host = ntohs(dport_net);
-        const char *proto_type = is_rtp ? "RTP" : "TS";
+    // 4. 全局去重校验（仅针对有效流节点）
+    if (is_duplicate(dest_ip, dport_net)) {
+        return;
+    }
 
-        log_message("发现新频道: %-15s 端口: %-5d 类型: %s\n", 
-                    ip_str, dport_host, proto_type);
-        
-        if (fp_out) {
-            // 修改这里：在EXTINF行显示IP和端口，格式为"(ip:端口)"
-            fprintf(fp_out, "#EXTINF:-1,IPTV频道-%03d (%s:%d)\n", 
-                    g_channel_count++, ip_str, dport_host);
-            fprintf(fp_out, "rtp://%s:%d\n", ip_str, dport_host);
-            fflush(fp_out);
+    // 更新协议统计数
+    if (is_rtp) g_stats.rtp_packets++;
+    if (is_ts)  g_stats.ts_packets++;
+
+    // 5. 存入全局池
+    if (g_pool_count < MAX_POOL_SIZE) {
+        g_pool[g_pool_count].ip = dest_ip;
+        g_pool[g_pool_count].port = dport_net;
+        g_pool[g_pool_count].proto_type = is_rtp ? 0 : 1;
+        g_pool_count++;
+        g_stats.unique_channels++;
+    } else {
+        static int warned = 0;
+        if (!warned) {
+            log_message("警告：节点池已满（%d个），后续节点将被忽略\n", MAX_POOL_SIZE);
+            warned = 1;
         }
+        return;
+    }
+
+    // 6. 输出发现的信息
+    char ip_str[INET_ADDRSTRLEN]; 
+    if (inet_ntop(AF_INET, &dest_ip, ip_str, sizeof(ip_str)) == NULL) {
+        strcpy(ip_str, "无效IP");
+    }
+    
+    uint16_t dport_host = ntohs(dport_net);
+    const char *proto_name = is_rtp ? "RTP" : "TS";
+    const char *proto_scheme = is_rtp ? "rtp" : "udp";
+
+    log_message("发现新频道: %-15s 端口: %-5d 类型: %s\n", 
+                ip_str, dport_host, proto_name);
+    
+    if (fp_out) {
+        fprintf(fp_out, "#EXTINF:-1,IPTV频道-%03d (%s:%d)\n", 
+                g_channel_count++, ip_str, dport_host);
+        fprintf(fp_out, "%s://%s:%d\n", proto_scheme, ip_str, dport_host);
+        fflush(fp_out);
     }
 }
 
-// ==================== 单IP扫描函数 ====================
+// ==================== 单 IP 扫描函数 ====================
 void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
     char mcast_ip[16];
     snprintf(mcast_ip, sizeof(mcast_ip), "%s.%d", prefix, last_byte);
@@ -294,10 +298,10 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
         time_t start_time = time(NULL);
         log_message("开始监听多播组: %s\n", mcast_ip);
         
-        // 等待期间多次尝试派发包处理，增加命中率
+        // 轮询抓包
         while (time(NULL) - start_time < g_wait_time && !stop_flag) {
             pcap_dispatch(handle, 100, packet_handler, NULL);
-            usleep(20000);
+            usleep(20000); // 20ms
         }
         
         setsockopt(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
@@ -316,10 +320,10 @@ int validate_arguments(int argc, char *argv[]) {
         printf("用法: %s <网卡> <M3U保存路径> <等待秒数> <网段1> [网段2...]\n", argv[0]);
         printf("示例: %s eth0 /tmp/iptv.m3u 2 239.81.0 239.81.1\n\n", argv[0]);
         printf("参数说明:\n");
-        printf("  网卡:       网络接口名称 (使用 ifconfig 查看)\n");
+        printf("  网卡:        网络接口名称 (使用 ifconfig 查看)\n");
         printf("  M3U保存路径: 输出M3U文件路径\n");
-        printf("  等待秒数:   每个多播地址监听时间(1-60秒)\n");
-        printf("  网段:       多播网段，如239.81.0 (支持1-10个)\n");
+        printf("  等待秒数:    每个多播地址监听时间(1-60秒)\n");
+        printf("  网段:        多播网段，如239.81.0 (支持1-10个)\n");
         return 0;
     }
     
@@ -355,14 +359,14 @@ int validate_arguments(int argc, char *argv[]) {
 // ==================== 打印统计信息 ====================
 void print_statistics() {
     printf("\n============ 扫描统计信息 ============\n");
-    printf("总数据包数:        %d\n", g_stats.total_packets);
-    printf("RTP包数:           %d\n", g_stats.rtp_packets);
-    printf("TS包数:            %d\n", g_stats.ts_packets);
-    printf("重复包数:          %d\n", g_stats.duplicate_packets);
-    printf("无效包数:          %d\n", g_stats.invalid_packets);
-    printf("唯一频道数:        %d\n", g_stats.unique_channels);
-    printf("哈希碰撞次数:      %d\n", g_stats.hash_collisions);
-    printf("M3U频道数:         %d\n", g_channel_count - 1);
+    printf("总数据包数:         %d\n", g_stats.total_packets);
+    printf("RTP包数:            %d\n", g_stats.rtp_packets);
+    printf("TS包数:             %d\n", g_stats.ts_packets);
+    printf("重复包数:           %d\n", g_stats.duplicate_packets);
+    printf("无效包数:           %d\n", g_stats.invalid_packets);
+    printf("唯一频道数:         %d\n", g_stats.unique_channels);
+    printf("哈希碰撞次数:       %d\n", g_stats.hash_collisions);
+    printf("M3U频道数:          %d\n", g_channel_count - 1);
     printf("====================================\n");
 }
 
@@ -398,7 +402,7 @@ int main(int argc, char *argv[]) {
     fprintf(fp_out, "# Generated by IPTV Scanner at %s\n", get_current_time());
     fprintf(fp_out, "# Format: EXTINF line shows IP:Port\n");
     
-    // 初始化pcap
+    // 初始化 pcap
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle = pcap_create(argv[1], errbuf);
     if (!handle) {
@@ -408,11 +412,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // 设置pcap参数
-    pcap_set_snaplen(handle, 256);    // 抓取足够头部
-    pcap_set_promisc(handle, 0);      // 非混杂模式
-    pcap_set_timeout(handle, 100);    // 超时时间
-    pcap_set_buffer_size(handle, 8 * 1024 * 1024); // 8MB缓冲区
+    // 设置 pcap 参数
+    pcap_set_snaplen(handle, 256);                  // 抓取足够头部
+    pcap_set_promisc(handle, 0);                    // 非混杂模式
+    pcap_set_timeout(handle, 100);                  // 100ms 超时
+    pcap_set_buffer_size(handle, 8 * 1024 * 1024);   // 8MB 缓冲区
     
     if (pcap_activate(handle) != 0) {
         log_message("激活pcap失败: %s\n", pcap_geterr(handle));
@@ -420,6 +424,11 @@ int main(int argc, char *argv[]) {
         if (fp_out) fclose(fp_out);
         if (log_file) fclose(log_file);
         return 1;
+    }
+    
+    // 设置非阻塞模式，防止 pcap_dispatch 卡顿
+    if (pcap_setnonblock(handle, 1, errbuf) < 0) {
+        log_message("设置非阻塞模式警告: %s\n", errbuf);
     }
     
     // 设置链路层偏移
@@ -441,7 +450,6 @@ int main(int argc, char *argv[]) {
     for (int arg_idx = 4; arg_idx < argc && !stop_flag; arg_idx++) {
         log_message("开始扫描网段: %s\n", argv[arg_idx]);
         
-        // 验证网段格式
         char prefix[16];
         if (strchr(argv[arg_idx], '.') == NULL) {
             log_message("无效的网段格式: %s\n", argv[arg_idx]);
@@ -451,14 +459,14 @@ int main(int argc, char *argv[]) {
         strncpy(prefix, argv[arg_idx], sizeof(prefix) - 1);
         prefix[sizeof(prefix) - 1] = '\0';
         
-        // 扫描该网段的254个地址
+        // 扫描该网段的 254 个地址
         for (int i = 1; i <= 254 && !stop_flag; i++) {
             scan_single_ip(handle, prefix, i);
             
-            // 每扫描10个地址输出一次进度
+            // 每扫描 10 个地址输出一次进度
             if (i % 10 == 0) {
-                printf("进度: %s.%d (%d/%d) - 已发现频道: %d\r", 
-                       prefix, i, i, 254, g_stats.unique_channels);
+                printf("进度: %s.%d (%d/254) - 已发现频道: %d\r", 
+                       prefix, i, i, g_stats.unique_channels);
                 fflush(stdout);
             }
         }
@@ -475,7 +483,7 @@ int main(int argc, char *argv[]) {
     time_t end_time = time(NULL);
     double elapsed = difftime(end_time, start_time);
     
-    // 输出M3U文件尾
+    // 输出 M3U 文件尾
     if (fp_out) {
         fprintf(fp_out, "# Total channels: %d\n", g_channel_count - 1);
         fprintf(fp_out, "# Scan time: %.1f seconds\n", elapsed);
