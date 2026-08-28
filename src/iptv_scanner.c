@@ -18,7 +18,8 @@
 #define HASH_TABLE_SIZE 4096
 #define MAX_LINE_LEN 256
 #define MAX_NETWORKS 10
-#define ETHERTYPE_VLAN 0x8100   // VLAN 标签 EtherType
+#define ETHERTYPE_VLAN 0x8100      // 802.1Q VLAN 标签 EtherType
+#define ETHERTYPE_QINQ 0x88A8      // 802.1ad QinQ 标签 EtherType
 
 // 结构体：记录唯一的 IP 和端口组合
 typedef struct {
@@ -69,20 +70,21 @@ char* get_current_time() {
 }
 
 void log_message(const char *format, ...) {
-    va_list args;
+    va_list args, args_copy;
     
     va_start(args, format);
+    va_copy(args_copy, args);
+    
     printf("[%s] ", get_current_time());
     vprintf(format, args);
     va_end(args);
     
     if (log_file) {
-        va_start(args, format);
         fprintf(log_file, "[%s] ", get_current_time());
-        vfprintf(log_file, format, args);
+        vfprintf(log_file, args_copy, args_copy);
         fflush(log_file);
-        va_end(args);
     }
+    va_end(args_copy);
 }
 
 uint64_t make_key(uint32_t ip, uint16_t port) {
@@ -104,8 +106,8 @@ int is_duplicate(uint32_t ip, uint16_t port) {
     
     HashNode *new_node = (HashNode*)malloc(sizeof(HashNode));
     if (!new_node) {
-        log_message("内存分配失败\n");
-        return 0;
+        log_message("警告: 哈希节点内存分配失败\n");
+        return 1; // 内存分配失败时当作重复处理，防止数据结构崩溃
     }
     new_node->key = key;
     new_node->next = hash_table[index];
@@ -133,7 +135,7 @@ void free_hash_table() {
 // ==================== 协议检测函数 ====================
 int is_valid_rtp(const u_char *payload, int payload_len) {
     if (payload_len < 12) return 0;
-    if ((payload[0] & 0xC0) != 0x80) return 0;
+    if ((payload[0] & 0xC0) != 0x80) return 0; // RFC 3550 Version 必须为 2
     if ((payload[1] & 0x7F) > 127) return 0;
     return 1;
 }
@@ -173,19 +175,20 @@ void setup_link_offset(pcap_t *handle) {
 void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
     g_stats.total_packets++;
     
-    // ----- 动态计算实际链路层偏移（支持 VLAN） -----
+    // ----- 动态计算实际链路层偏移（支持 Single / Double VLAN） -----
     int offset = g_link_offset;
     if (g_link_type == DLT_EN10MB && header->caplen >= 14) {
-        // 读取以太网类型字段（偏移12~13）
         uint16_t eth_type = (packet[12] << 8) | packet[13];
-        if (eth_type == ETHERTYPE_VLAN) {
-            offset += 4;   // 跳过 4 字节 VLAN 标签（含 TCI）
-            // 注：如果存在 QinQ（双层VLAN），可继续检查，但此处简化处理
+        // 循环跳过 VLAN / QinQ 报头
+        while ((eth_type == ETHERTYPE_VLAN || eth_type == ETHERTYPE_QINQ) && 
+               (header->caplen >= (bpf_u_int32)(offset + 4))) {
+            offset += 4;
+            eth_type = (packet[offset - 2] << 8) | packet[offset - 1];
         }
     }
     
     // 1. 安全边界检查：确保包长足够容纳链路层 + IP头
-    if (header->caplen < offset + sizeof(struct ip)) {
+    if (header->caplen < (bpf_u_int32)(offset + sizeof(struct ip))) {
         g_stats.invalid_packets++;
         return;
     }
@@ -198,7 +201,7 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
     const u_char *udp_ptr = packet + offset + ip_header_len;
     
     // 2. 安全边界检查：确保 UDP 头部完全可读
-    if (header->caplen < (offset + ip_header_len + sizeof(struct udphdr))) {
+    if (header->caplen < (bpf_u_int32)(offset + ip_header_len + sizeof(struct udphdr))) {
         g_stats.invalid_packets++;
         return;
     }
@@ -254,7 +257,7 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
     // 6. 输出发现的信息
     char ip_str[INET_ADDRSTRLEN]; 
     if (inet_ntop(AF_INET, &dest_ip, ip_str, sizeof(ip_str)) == NULL) {
-        strcpy(ip_str, "无效IP");
+        strncpy(ip_str, "无效IP", sizeof(ip_str));
     }
     
     uint16_t dport_host = ntohs(dport_net);
@@ -274,7 +277,7 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
 
 // ==================== 单 IP 扫描函数 ====================
 void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
-    char mcast_ip[16];
+    char mcast_ip[32]; // 扩大缓冲区大小防止溢出
     snprintf(mcast_ip, sizeof(mcast_ip), "%s.%d", prefix, last_byte);
     
     int s = socket(AF_INET, SOCK_DGRAM, 0);
@@ -314,14 +317,14 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
 // ==================== 参数验证函数 ====================
 int validate_arguments(int argc, char *argv[]) {
     if (argc < 5) {
-        printf("\nIPTV 严格去重探测扫描器 - 增强版 (支持VLAN)\n");
+        printf("\nIPTV 严格去重探测扫描器 - 增强修复版 (支持VLAN/QinQ)\n");
         printf("用法: %s <网卡> <M3U保存路径> <等待秒数> <网段1> [网段2...]\n", argv[0]);
         printf("示例: %s eth0 /tmp/iptv.m3u 2 239.81.0 239.81.1\n\n", argv[0]);
         printf("参数说明:\n");
-        printf("  网卡:        网络接口名称 (使用 ifconfig 查看)\n");
-        printf("  M3U保存路径: 输出M3U文件路径\n");
-        printf("  等待秒数:    每个多播地址监听时间(1-60秒)\n");
-        printf("  网段:        多播网段，如239.81.0 (支持1-10个)\n");
+        printf("  网卡:         网络接口名称 (使用 ifconfig 查看)\n");
+        printf("  M3U保存路径: Output M3U 文件路径\n");
+        printf("  等待秒数:     每个多播地址监听时间(1-60秒)\n");
+        printf("  网段:         多播网段，如239.81.0 (支持1-10个)\n");
         return 0;
     }
     
