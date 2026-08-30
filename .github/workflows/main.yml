@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [23.05.5, 25.12.5]
+        version: [23.05.6, 25.12.5]
         arch:
           - { name: mipsel_24kc, target: ramips, subtarget: mt7621 }
           - { name: mips_24kc, target: ath79, subtarget: generic }
