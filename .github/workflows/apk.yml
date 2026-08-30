@@ -15,19 +15,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 小端序 MIPS (联发科路由)
           - arch: mipsel_24kc
             target: ramips
             subtarget: mt7621
-          # 大端序 MIPS (高通/阿瑟罗路由)
           - arch: mips_24kc
             target: ath79
             subtarget: generic
-          # x86-64 (软路由/虚拟机)
           - arch: x86_64
             target: x86
             subtarget: 64
-          # ARM64 (树莓派4/5, NanoPi)
           - arch: aarch64_generic
             target: rockchip
             subtarget: armv8
@@ -39,7 +35,6 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # 安装编译工具及 zstd（用于解压 .tar.zst）
           sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
             libssl-dev xsltproc wget unzip qemu-utils python3 file zstd
 
@@ -47,7 +42,7 @@ jobs:
         run: |
           VERSION="25.12.5"
           SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
-          # 递归下载匹配的 SDK（仅获取 .tar.zst 文件）
+          # 下载 .tar.zst SDK
           wget -nv -r -l1 -nd -A "openwrt-sdk-*.tar.zst" -e robots=off "$SDK_BASE" || true
           SDK_FILE=$(ls openwrt-sdk-*.tar.zst 2>/dev/null | head -n 1)
           if [ -z "$SDK_FILE" ]; then
@@ -55,8 +50,12 @@ jobs:
             exit 1
           fi
           echo "SDK_FILE=$SDK_FILE" >> $GITHUB_ENV
-          # tar 自动识别 .zst（需要 zstd 命令行工具）
-          tar -xJf "$SDK_FILE"
+
+          # 正确解压 .tar.zst（先转成 .tar，再解包）
+          zstd -d "$SDK_FILE"          # 生成 .tar 文件
+          TAR_FILE="${SDK_FILE%.zst}"  # 去掉 .zst 后缀
+          tar -xf "$TAR_FILE"
+
           SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
           if [ -z "$SDK_DIR" ]; then
             echo "::error::Failed to extract SDK"
@@ -67,7 +66,6 @@ jobs:
       - name: Compile Package
         run: |
           cd openwrt-sdk
-          # 创建包目录并复制源码
           mkdir -p package/iptv_scanner
           cp -r ../src ../Makefile package/iptv_scanner/
           if [ ! -f package/iptv_scanner/Makefile ]; then
@@ -75,18 +73,14 @@ jobs:
             exit 1
           fi
 
-          # 更新 feeds（可能不需要，但保留以防依赖）
           ./scripts/feeds update -a
-          # 启用包（确保包名与 Makefile 中定义的一致）
           echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
           make defconfig
-          # 编译包（生成 APK）
           make package/iptv_scanner/compile V=s -j$(nproc)
 
       - name: Organize Artifacts
         run: |
           mkdir -p ./deploy
-          # 搜索生成的 APK 文件（新版 OpenWrt 使用 .apk）
           find openwrt-sdk/bin/packages/ -name "iptv_scanner*.apk" -exec cp {} ./deploy/ \;
           if [ -z "$(ls -A ./deploy)" ]; then
             echo "::error::No APK files produced!"
