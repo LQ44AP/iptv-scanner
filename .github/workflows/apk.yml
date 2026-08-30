@@ -40,7 +40,7 @@ jobs:
 
       - name: Download and Setup SDK (24.10)
         run: |
-          VERSION="24.10.0"
+          VERSION="25.12.5"
           SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
           wget -nv -r -l1 -nd -A "openwrt-sdk-*.tar.xz" -e robots=off "$SDK_BASE" || true
           SDK_FILE=$(ls openwrt-sdk-*.tar.xz 2>/dev/null | head -n 1)
