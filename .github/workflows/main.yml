@@ -35,17 +35,14 @@ jobs:
         id: vars
         run: |
           VERSION="${{ matrix.version }}"
-          if [ "$VERSION" = "23.05.6" ]; then
-            echo "suffix=ipk" >> $GITHUB_OUTPUT
-            echo "ext=xz" >> $GITHUB_OUTPUT
-            echo "sdk_pattern=openwrt-sdk-*.tar.xz" >> $GITHUB_OUTPUT
-          elif [ "$VERSION" = "25.12.5" ]; then
+          if [[ "$VERSION" =~ ^25\. ]] || [[ "$VERSION" =~ ^main ]]; then
             echo "suffix=apk" >> $GITHUB_OUTPUT
             echo "ext=zst" >> $GITHUB_OUTPUT
             echo "sdk_pattern=openwrt-sdk-*.tar.zst" >> $GITHUB_OUTPUT
           else
-            echo "::error::Unsupported version"
-            exit 1
+            echo "suffix=ipk" >> $GITHUB_OUTPUT
+            echo "ext=xz" >> $GITHUB_OUTPUT
+            echo "sdk_pattern=openwrt-sdk-*.tar.xz" >> $GITHUB_OUTPUT
           fi
 
       - name: Download and Setup SDK
@@ -80,21 +77,17 @@ jobs:
 
       - name: Compile Package
         run: |
-          # 1. Update and install feeds to make dependencies (like libpcap) available
           cd openwrt-sdk
           ./scripts/feeds update -a
           ./scripts/feeds install libpcap
 
-          # 2. Setup local package directory
           mkdir -p package/iptv_scanner
           if [ -d "../src" ]; then cp -r ../src package/iptv_scanner/; fi
           cp ../Makefile package/iptv_scanner/
 
-          # 3. Configure build
           echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
           make defconfig
 
-          # 4. Compile package and dependencies
           make package/iptv_scanner/compile V=s -j$(nproc)
 
       - name: Organize Artifacts
@@ -103,26 +96,36 @@ jobs:
           SUFFIX="${{ steps.vars.outputs.suffix }}"
           ARCH_NAME="${{ matrix.arch.name }}"
 
-          # 递归查找 bin 目录下所有生成的安装包
-          FILES=$(find openwrt-sdk/bin/ -type f -name "*.${SUFFIX}")
+          # 关键修改：从 openwrt-sdk/bin 根目录下全盘递归查找生成的包
+          FILES=$(find openwrt-sdk/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \))
 
           if [ -z "$FILES" ]; then
-            echo "::error::No .${SUFFIX} files produced!"
+            echo "::error::No package files (.ipk or .apk) produced!"
             exit 1
           fi
 
           for FILE in $FILES; do
             FILENAME=$(basename "$FILE")
-            if [ "$SUFFIX" = "apk" ]; then
-              # apk 添加架构名标识
+            
+            # 如果是 apk 格式且文件名中尚未包含架构名称，则追加架构名
+            if [[ "$FILENAME" == *.apk ]] && [[ "$FILENAME" != *"${ARCH_NAME}"* ]]; then
               BASE_NAME="${FILENAME%.*}"
-              NEW_NAME="${BASE_NAME}_${ARCH_NAME}.${SUFFIX}"
+              NEW_NAME="${BASE_NAME}_${ARCH_NAME}.apk"
               cp "$FILE" "./deploy/${NEW_NAME}"
+              echo "Copied & Renamed APK: $FILENAME -> $NEW_NAME"
             else
-              # ipk 保持原名
+              # ipk 默认自带架构名，直接复制
               cp "$FILE" ./deploy/
+              echo "Copied Package: $FILENAME"
             fi
           done
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          # 必须将 version 和 arch.name 结合命名，防止不同 matrix 任务相互覆盖 Artifact
+          name: iptv_scanner-${{ matrix.version }}-${{ matrix.arch.name }}
+          path: ./deploy/*
 
   publish:
     needs: build
@@ -142,5 +145,5 @@ jobs:
             ./release-assets/*.ipk
             ./release-assets/*.apk
           body: |
-            ## IPTV 扫描器 - 多版本 / 多架构自动编译
+            ## IPTV 扫描器多架构 / 多版本自动编译
           generate_release_notes: false
