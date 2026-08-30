@@ -42,7 +42,6 @@ jobs:
         run: |
           VERSION="25.12.5"
           SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
-          # 下载 .tar.zst SDK
           wget -nv -r -l1 -nd -A "openwrt-sdk-*.tar.zst" -e robots=off "$SDK_BASE" || true
           SDK_FILE=$(ls openwrt-sdk-*.tar.zst 2>/dev/null | head -n 1)
           if [ -z "$SDK_FILE" ]; then
@@ -50,12 +49,9 @@ jobs:
             exit 1
           fi
           echo "SDK_FILE=$SDK_FILE" >> $GITHUB_ENV
-
-          # 正确解压 .tar.zst（先转成 .tar，再解包）
-          zstd -d "$SDK_FILE"          # 生成 .tar 文件
-          TAR_FILE="${SDK_FILE%.zst}"  # 去掉 .zst 后缀
+          zstd -d "$SDK_FILE"
+          TAR_FILE="${SDK_FILE%.zst}"
           tar -xf "$TAR_FILE"
-
           SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
           if [ -z "$SDK_DIR" ]; then
             echo "::error::Failed to extract SDK"
@@ -73,9 +69,19 @@ jobs:
             exit 1
           fi
 
+          # 更新 feeds（可选，但确保包依赖可用）
           ./scripts/feeds update -a
+
+          # 启用您的包及其依赖 libpcap
           echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
+          echo "CONFIG_PACKAGE_libpcap=y" >> .config
+
           make defconfig
+
+          # 先编译依赖库 libpcap，确保头文件和库已就绪
+          make package/libpcap/compile -j$(nproc)
+
+          # 编译您的包
           make package/iptv_scanner/compile V=s -j$(nproc)
 
       - name: Organize Artifacts
@@ -109,5 +115,5 @@ jobs:
         with:
           files: ./release-assets/*.apk
           body: |
-            ## IPTV 扫描器 APK 多架构自动编译版本 (OpenWrt 25.12.5)
+            ## IPTV 扫描器 APK 多架构自动编译版本
           generate_release_notes: false
