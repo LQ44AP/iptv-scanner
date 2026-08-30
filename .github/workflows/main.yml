@@ -142,12 +142,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # 同时通配 .ipk 和 .apk 文件
           files: |
             ./release-assets/*.ipk
             ./release-assets/*.apk
           body: |
-            ## IPTV 扫描器多架构 / 多版本自动编译版本
-            - OpenWrt 23.05.x (`.ipk`)
-            - OpenWrt 25.12.x (`.apk`)
+            ## IPTV 扫描器 - 多版本 / 多架构自动编译
           generate_release_notes: false
