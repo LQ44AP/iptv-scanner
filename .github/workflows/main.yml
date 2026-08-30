@@ -132,7 +132,7 @@ jobs:
         with:
           files: ./release-assets/*
           body: |
-            ## IPTV Scanner Artifacts
-            - **OpenWrt 23.05.5**: `.ipk` packages
-            - **OpenWrt 25.12.5**: `.apk` packages
+            ## IPTV 扫描器多架构自动编译版本
+            - **OpenWrt 23.05.x**: `.ipk` packages
+            - **OpenWrt 25.12.x**: `.apk` packages
           generate_release_notes: false
