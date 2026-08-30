@@ -103,7 +103,7 @@ jobs:
           SUFFIX="${{ steps.vars.outputs.suffix }}"
           ARCH_NAME="${{ matrix.arch.name }}"
 
-          # 查找所有编译出的包文件 (.ipk 或 .apk)
+          # 递归查找 bin 目录下所有生成的安装包
           FILES=$(find openwrt-sdk/bin/ -type f -name "*.${SUFFIX}")
 
           if [ -z "$FILES" ]; then
@@ -113,18 +113,14 @@ jobs:
 
           for FILE in $FILES; do
             FILENAME=$(basename "$FILE")
-            
             if [ "$SUFFIX" = "apk" ]; then
-              # 只对 .apk 进行重命名，在后缀前插入架构名
-              # 例如：iptv_scanner-1.0.0-r1.apk -> iptv_scanner-1.0.0-r1_${ARCH_NAME}.apk
+              # apk 添加架构名标识
               BASE_NAME="${FILENAME%.*}"
               NEW_NAME="${BASE_NAME}_${ARCH_NAME}.${SUFFIX}"
               cp "$FILE" "./deploy/${NEW_NAME}"
-              echo "Renamed APK: $FILENAME -> $NEW_NAME"
             else
-              # .ipk 本身已包含架构名，直接复制保持原名
+              # ipk 保持原名
               cp "$FILE" ./deploy/
-              echo "Kept IPK original name: $FILENAME"
             fi
           done
 
