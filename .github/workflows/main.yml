@@ -14,18 +14,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 版本维度
         version: [23.05.5, 25.12.5]
-        # 架构维度（共享相同列表，但可单独调整）
         arch:
           - { name: mipsel_24kc, target: ramips, subtarget: mt7621 }
           - { name: mips_24kc, target: ath79, subtarget: generic }
           - { name: x86_64, target: x86, subtarget: 64 }
           - { name: aarch64_generic, target: rockchip, subtarget: armv8 }
-        # 排除某些版本不支持的组合（可选）
-        # exclude:
-        #   - version: 23.05.5
-        #     arch: { name: aarch64_generic, target: rockchip, subtarget: armv8 }  # 23.05 可能不支持 rockchip
 
     steps:
       - name: Checkout Code
@@ -35,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
-            libssl-dev xsltproc wget unzip qemu-utils python3 file zstd
+            libssl-dev xsltproc wget unzip qemu-utils python3 file zstd tar
 
       - name: Set version-specific variables
         id: vars
@@ -61,24 +55,20 @@ jobs:
           SUBTARGET="${{ matrix.arch.subtarget }}"
           SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}/"
           PATTERN="${{ steps.vars.outputs.sdk_pattern }}"
+
           wget -nv -r -l1 -nd -A "$PATTERN" -e robots=off "$SDK_BASE" || true
-          SDK_FILE=$(ls $PATTERN 2>/dev/null | head -n 1)
+          SDK_FILE=$(ls $PATTERN 2>/devnull | head -n 1)
+
           if [ -z "$SDK_FILE" ]; then
             echo "::error::No SDK file found at $SDK_BASE"
             exit 1
           fi
-          echo "SDK_FILE=$SDK_FILE" >> $GITHUB_ENV
 
           EXT="${{ steps.vars.outputs.ext }}"
           if [ "$EXT" = "xz" ]; then
             tar -xJf "$SDK_FILE"
           elif [ "$EXT" = "zst" ]; then
-            zstd -d "$SDK_FILE"
-            TAR_FILE="${SDK_FILE%.zst}"
-            tar -xf "$TAR_FILE"
-          else
-            echo "::error::Unknown compression format"
-            exit 1
+            tar --zstd -xf "$SDK_FILE"
           fi
 
           SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
@@ -90,30 +80,31 @@ jobs:
 
       - name: Compile Package
         run: |
+          # 1. Update and install feeds to make dependencies (like libpcap) available
           cd openwrt-sdk
-          mkdir -p package/iptv_scanner
-          cp -r ../src ../Makefile package/iptv_scanner/
-          if [ ! -f package/iptv_scanner/Makefile ]; then
-            echo "::error::Makefile not found"
-            exit 1
-          fi
-
           ./scripts/feeds update -a
+          ./scripts/feeds install libpcap
+
+          # 2. Setup local package directory
+          mkdir -p package/iptv_scanner
+          if [ -d "../src" ]; then cp -r ../src package/iptv_scanner/; fi
+          cp ../Makefile package/iptv_scanner/
+
+          # 3. Configure build
           echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
-          echo "CONFIG_PACKAGE_libpcap=y" >> .config
           make defconfig
 
-          # 编译依赖库 libpcap（如果包依赖它）
-          make package/libpcap/compile -j$(nproc)
-          # 编译自己的包
+          # 4. Compile package and dependencies
           make package/iptv_scanner/compile V=s -j$(nproc)
 
       - name: Organize Artifacts
         run: |
           mkdir -p ./deploy
           SUFFIX="${{ steps.vars.outputs.suffix }}"
-          # 搜索匹配的包文件
-          find openwrt-sdk/bin/packages/ -name "iptv_scanner*.${SUFFIX}" -exec cp {} ./deploy/ \;
+          
+          # OpenWrt output paths: bin/packages/... or bin/targets/...
+          find openwrt-sdk/bin/ -type f -name "iptv_scanner*.${SUFFIX}" -exec cp {} ./deploy/ \;
+
           if [ -z "$(ls -A ./deploy)" ]; then
             echo "::error::No .${SUFFIX} files produced!"
             exit 1
@@ -141,7 +132,7 @@ jobs:
         with:
           files: ./release-assets/*
           body: |
-            ## IPTV 扫描器 - 多版本 / 多架构编译产物
-            - OpenWrt 23.05.5 → `.ipk`
-            - OpenWrt 25.12.5 → `.apk`
+            ## IPTV Scanner Artifacts
+            - **OpenWrt 23.05.5**: `.ipk` packages
+            - **OpenWrt 25.12.5**: `.apk` packages
           generate_release_notes: false
