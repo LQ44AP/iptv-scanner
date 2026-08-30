@@ -101,20 +101,32 @@ jobs:
         run: |
           mkdir -p ./deploy
           SUFFIX="${{ steps.vars.outputs.suffix }}"
-          
-          # OpenWrt output paths: bin/packages/... or bin/targets/...
-          find openwrt-sdk/bin/ -type f -name "iptv_scanner*.${SUFFIX}" -exec cp {} ./deploy/ \;
+          ARCH_NAME="${{ matrix.arch.name }}"
 
-          if [ -z "$(ls -A ./deploy)" ]; then
+          # 查找所有编译出的包文件 (.ipk 或 .apk)
+          FILES=$(find openwrt-sdk/bin/ -type f -name "*.${SUFFIX}")
+
+          if [ -z "$FILES" ]; then
             echo "::error::No .${SUFFIX} files produced!"
             exit 1
           fi
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptv_scanner-${{ matrix.version }}-${{ matrix.arch.name }}
-          path: ./deploy/*
+          for FILE in $FILES; do
+            FILENAME=$(basename "$FILE")
+            
+            if [ "$SUFFIX" = "apk" ]; then
+              # 只对 .apk 进行重命名，在后缀前插入架构名
+              # 例如：iptv_scanner-1.0.0-r1.apk -> iptv_scanner-1.0.0-r1_${ARCH_NAME}.apk
+              BASE_NAME="${FILENAME%.*}"
+              NEW_NAME="${BASE_NAME}_${ARCH_NAME}.${SUFFIX}"
+              cp "$FILE" "./deploy/${NEW_NAME}"
+              echo "Renamed APK: $FILENAME -> $NEW_NAME"
+            else
+              # .ipk 本身已包含架构名，直接复制保持原名
+              cp "$FILE" ./deploy/
+              echo "Kept IPK original name: $FILENAME"
+            fi
+          done
 
   publish:
     needs: build
