@@ -57,7 +57,7 @@ jobs:
           PATTERN="${{ steps.vars.outputs.sdk_pattern }}"
 
           wget -nv -r -l1 -nd -A "$PATTERN" -e robots=off "$SDK_BASE" || true
-          SDK_FILE=$(ls $PATTERN 2>/devnull | head -n 1)
+          SDK_FILE=$(ls $PATTERN 2>/dev/null | head -n 1)
 
           if [ -z "$SDK_FILE" ]; then
             echo "::error::No SDK file found at $SDK_BASE"
