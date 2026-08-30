@@ -36,12 +36,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
-            libssl-dev xsltproc wget unzip qemu-utils python3 python3-distutils file
+            libssl-dev xsltproc wget unzip qemu-utils python3 file
 
       - name: Download and Setup SDK (24.10)
         run: |
-          # 使用 OpenWrt 24.10.0 稳定版（如需 snapshot 可替换为 "snapshots"）
-          VERSION="25.12.5"
+          VERSION="24.10.0"
           SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
           wget -nv -r -l1 -nd -A "openwrt-sdk-*.tar.xz" -e robots=off "$SDK_BASE" || true
           SDK_FILE=$(ls openwrt-sdk-*.tar.xz 2>/dev/null | head -n 1)
@@ -69,7 +68,6 @@ jobs:
           fi
 
           ./scripts/feeds update -a
-          # 启用包（确保包名正确）
           echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
           make defconfig
           make package/iptv_scanner/compile V=s -j$(nproc)
@@ -77,7 +75,6 @@ jobs:
       - name: Organize Artifacts
         run: |
           mkdir -p ./deploy
-          # 搜索生成的 APK 文件（新格式）
           find openwrt-sdk/bin/packages/ -name "iptv_scanner*.apk" -exec cp {} ./deploy/ \;
           if [ -z "$(ls -A ./deploy)" ]; then
             echo "::error::No APK files produced!"
