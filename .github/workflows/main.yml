@@ -96,25 +96,25 @@ jobs:
           SUFFIX="${{ steps.vars.outputs.suffix }}"
           ARCH_NAME="${{ matrix.arch.name }}"
 
-          # 关键修改：从 openwrt-sdk/bin 根目录下全盘递归查找生成的包
-          FILES=$(find openwrt-sdk/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \))
+          # 仅查找以 iptv_scanner 开头的 ipk 或 apk 安装包
+          FILES=$(find openwrt-sdk/bin/ -type f \( -name "iptv_scanner*.ipk" -o -name "iptv_scanner*.apk" \))
 
           if [ -z "$FILES" ]; then
-            echo "::error::No package files (.ipk or .apk) produced!"
+            echo "::error::No iptv_scanner package files produced!"
             exit 1
           fi
 
           for FILE in $FILES; do
             FILENAME=$(basename "$FILE")
             
-            # 如果是 apk 格式且文件名中尚未包含架构名称，则追加架构名
+            # 如果是 apk 格式且文件名中尚未包含架构名称，追加架构名
             if [[ "$FILENAME" == *.apk ]] && [[ "$FILENAME" != *"${ARCH_NAME}"* ]]; then
               BASE_NAME="${FILENAME%.*}"
               NEW_NAME="${BASE_NAME}_${ARCH_NAME}.apk"
               cp "$FILE" "./deploy/${NEW_NAME}"
               echo "Copied & Renamed APK: $FILENAME -> $NEW_NAME"
             else
-              # ipk 默认自带架构名，直接复制
+              # ipk 或已带架构名的包直接复制
               cp "$FILE" ./deploy/
               echo "Copied Package: $FILENAME"
             fi
