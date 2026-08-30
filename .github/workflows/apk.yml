@@ -32,24 +32,28 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
-            libssl-dev xsltproc wget unzip qemu-utils python3 file
+     - name: Install Dependencies
+  run: |
+    sudo apt-get update
+    # 添加 zstd 以解压 .tar.zst 格式的 SDK
+    sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
+      libssl-dev xsltproc wget unzip qemu-utils python3 file zstd
 
-      - name: Download and Setup SDK (24.10)
-        run: |
-          VERSION="25.12.5"
-          SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
-          wget -nv -r -l1 -nd -A "openwrt-sdk-*.tar.xz" -e robots=off "$SDK_BASE" || true
-          SDK_FILE=$(ls openwrt-sdk-*.tar.xz 2>/dev/null | head -n 1)
-          if [ -z "$SDK_FILE" ]; then
-            echo "::error::No SDK file found at $SDK_BASE"
-            exit 1
-          fi
-          echo "SDK_FILE=$SDK_FILE" >> $GITHUB_ENV
-          tar -xJf "$SDK_FILE"
+- name: Download and Setup SDK (25.12.5)
+  run: |
+    VERSION="25.12.5"
+    SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
+    # 将匹配模式从 .tar.xz 改为 .tar.zst
+    wget -nv -r -l1 -nd -A "openwrt-sdk-*.tar.zst" -e robots=off "$SDK_BASE" || true
+    SDK_FILE=$(ls openwrt-sdk-*.tar.zst 2>/dev/null | head -n 1)
+    if [ -z "$SDK_FILE" ]; then
+      echo "::error::No SDK file found at $SDK_BASE"
+      exit 1
+    fi
+    echo "SDK_FILE=$SDK_FILE" >> $GITHUB_ENV
+    # tar 可以自动识别 .zst 格式，但需要 zstd 命令支持
+    tar -xJf "$SDK_FILE"
+    # ... 后续步骤保持不变
           SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
           if [ -z "$SDK_DIR" ]; then
             echo "::error::Failed to extract SDK"
