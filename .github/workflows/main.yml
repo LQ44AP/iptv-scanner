@@ -131,8 +131,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    # 允许 Tag 推送 或 手动点击 Trigger 时触发发布
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -140,16 +139,9 @@ jobs:
           path: ./release-assets
           merge-multiple: true
 
-      - name: Inspect release assets
-        run: |
-          echo "=== Release Assets ==="
-          ls -la ./release-assets/
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # 如果是手动触发且无 tag，则使用运行的 run_number 或时间作为自定义 tag
-          tag_name: ${{ github.ref_name }}
           files: ./release-assets/*
           body: |
             ## IPTV 扫描器多架构自动编译版本
