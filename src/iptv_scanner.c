@@ -81,7 +81,7 @@ void log_message(const char *format, ...) {
     
     if (log_file) {
         fprintf(log_file, "[%s] ", get_current_time());
-        vfprintf(log_file, format, args_copy); // 修复: 第二个参数传入格式化字符串
+        vfprintf(log_file, format, args_copy);
         fflush(log_file);
     }
     va_end(args_copy);
@@ -91,23 +91,30 @@ uint64_t make_key(uint32_t ip, uint16_t port) {
     return ((uint64_t)ip << 16) | port;
 }
 
-int is_duplicate(uint32_t ip, uint16_t port) {
+// 纯查询函数：检查 key 是否存在
+int check_duplicate(uint32_t ip, uint16_t port) {
     uint64_t key = make_key(ip, port);
     unsigned int index = key % HASH_TABLE_SIZE;
     
     HashNode *node = hash_table[index];
     while (node) {
         if (node->key == key) {
-            g_stats.duplicate_packets++;
             return 1;
         }
         node = node->next;
     }
-    
+    return 0;
+}
+
+// 插入新节点到哈希表
+int insert_hash(uint32_t ip, uint16_t port) {
+    uint64_t key = make_key(ip, port);
+    unsigned int index = key % HASH_TABLE_SIZE;
+
     HashNode *new_node = (HashNode*)malloc(sizeof(HashNode));
     if (!new_node) {
-        log_message("警告: 哈希节点内存分配失败\n");
-        return 1; // 内存分配失败时当作重复处理，防止崩溃
+        log_message("错误: 哈希节点内存分配失败\n");
+        return -1;
     }
     new_node->key = key;
     new_node->next = hash_table[index];
@@ -116,7 +123,6 @@ int is_duplicate(uint32_t ip, uint16_t port) {
         g_stats.hash_collisions++;
     }
     hash_table[index] = new_node;
-    
     return 0;
 }
 
@@ -179,7 +185,6 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
     int offset = g_link_offset;
     if (g_link_type == DLT_EN10MB && header->caplen >= 14) {
         uint16_t eth_type = (packet[12] << 8) | packet[13];
-        // 循环跳过 VLAN / QinQ 报头
         while ((eth_type == ETHERTYPE_VLAN || eth_type == ETHERTYPE_QINQ) && 
                (header->caplen >= (bpf_u_int32)(offset + 4))) {
             offset += 4;
@@ -231,21 +236,13 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
     }
 
     // 4. 全局去重校验
-    if (is_duplicate(dest_ip, dport_net)) {
+    if (check_duplicate(dest_ip, dport_net)) {
+        g_stats.duplicate_packets++;
         return;
     }
 
-    if (is_rtp) g_stats.rtp_packets++;
-    if (is_ts)  g_stats.ts_packets++;
-
-    // 5. 存入全局池
-    if (g_pool_count < MAX_POOL_SIZE) {
-        g_pool[g_pool_count].ip = dest_ip;
-        g_pool[g_pool_count].port = dport_net;
-        g_pool[g_pool_count].proto_type = is_rtp ? 0 : 1;
-        g_pool_count++;
-        g_stats.unique_channels++;
-    } else {
+    // 5. 校验通过，写入哈希表与全局池
+    if (g_pool_count >= MAX_POOL_SIZE) {
         static int warned = 0;
         if (!warned) {
             log_message("警告：节点池已满（%d个），后续节点将被忽略\n", MAX_POOL_SIZE);
@@ -253,6 +250,19 @@ void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char
         }
         return;
     }
+
+    if (insert_hash(dest_ip, dport_net) < 0) {
+        return; // 内存分配失败则丢弃
+    }
+
+    if (is_rtp) g_stats.rtp_packets++;
+    if (is_ts)  g_stats.ts_packets++;
+
+    g_pool[g_pool_count].ip = dest_ip;
+    g_pool[g_pool_count].port = dport_net;
+    g_pool[g_pool_count].proto_type = is_rtp ? 0 : 1;
+    g_pool_count++;
+    g_stats.unique_channels++;
 
     // 6. 输出发现的信息
     char ip_str[INET_ADDRSTRLEN]; 
@@ -302,7 +312,7 @@ void scan_single_ip(pcap_t *handle, const char *prefix, int last_byte) {
         
         while (time(NULL) - start_time < g_wait_time && !stop_flag) {
             pcap_dispatch(handle, 100, packet_handler, NULL);
-            usleep(20000);
+            usleep(20000); // 20ms 睡眠，降低 CPU 占用
         }
         
         setsockopt(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
@@ -321,10 +331,10 @@ int validate_arguments(int argc, char *argv[]) {
         printf("用法: %s <网卡> <M3U保存路径> <等待秒数> <网段1> [网段2...]\n", argv[0]);
         printf("示例: %s eth0 /tmp/iptv.m3u 2 239.81.0 239.81.1\n\n", argv[0]);
         printf("参数说明:\n");
-        printf("  网卡:         网络接口名称 (使用 ifconfig 查看)\n");
+        printf("  网卡:          网络接口名称 (使用 ifconfig 查看)\n");
         printf("  M3U保存路径: 输出 M3U 文件路径\n");
-        printf("  等待秒数:     每个多播地址监听时间(1-60秒)\n");
-        printf("  网段:         多播网段，如239.81.0 (支持1-10个)\n");
+        printf("  等待秒数:      每个多播地址监听时间(1-60秒)\n");
+        printf("  网段:          多播网段，前三位如239.81.0 (支持1-10个)\n");
         return 0;
     }
     
@@ -337,8 +347,10 @@ int validate_arguments(int argc, char *argv[]) {
     int valid_networks = 0;
     for (int i = 4; i < argc && i < 4 + MAX_NETWORKS; i++) {
         int a, b, c;
-        if (sscanf(argv[i], "%d.%d.%d", &a, &b, &c) != 3) {
-            printf("错误：无效的网段格式: %s\n", argv[i]);
+        char extra;
+        // 严格匹配 X.Y.Z 格式，防止误输入完整的 IP (如 239.81.0.1)
+        if (sscanf(argv[i], "%d.%d.%d%c", &a, &b, &c, &extra) != 3) {
+            printf("错误：无效的网段格式: %s (应为 前三段，例如 239.81.0)\n", argv[i]);
             return 0;
         }
         if (a < 224 || a > 239) {
@@ -423,10 +435,10 @@ int main(int argc, char *argv[]) {
         log_message("设置非阻塞模式警告: %s\n", errbuf);
     }
 
-    // 设置 BPF 硬件/内核级数据包过滤器
+    // 关键修正：修复支持 VLAN / QinQ 环境下的 BPF 过滤规则
     struct bpf_program fp;
-    char filter[] = "udp and dst net 224.0.0.0/4";
-    if (pcap_compile(handle, &fp, filter, 0, PCAP_NETMASK_UNKNOWN) == 0) {
+    char filter[] = "vlan or (udp and dst net 224.0.0.0/4)";
+    if (pcap_compile(handle, &fp, filter, 1, PCAP_NETMASK_UNKNOWN) == 0) {
         if (pcap_setfilter(handle, &fp) < 0) {
             log_message("设置 BPF 过滤器失败: %s\n", pcap_geterr(handle));
         } else {
@@ -454,11 +466,6 @@ int main(int argc, char *argv[]) {
         log_message("开始扫描网段: %s\n", argv[arg_idx]);
         
         char prefix[16];
-        if (strchr(argv[arg_idx], '.') == NULL) {
-            log_message("无效的网段格式: %s\n", argv[arg_idx]);
-            continue;
-        }
-        
         strncpy(prefix, argv[arg_idx], sizeof(prefix) - 1);
         prefix[sizeof(prefix) - 1] = '\0';
         
