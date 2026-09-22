@@ -1,0 +1,121 @@
+name: Build IPTV Scanner LuCI Package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '23.05.6'
+            format: 'ipk'
+            sdk_ext: 'xz'
+            sdk_url: 'https://downloads.openwrt.org/releases/23.05.6/targets/x86/64/openwrt-sdk-23.05.6-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz'
+          - version: '24.12.5'
+            format: 'apk'
+            sdk_ext: 'zst'
+            sdk_url: 'https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install zstd
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Download OpenWrt SDK
+        run: |
+          set -e
+          wget -q -O sdk.tar.${{ matrix.sdk_ext }} "${{ matrix.sdk_url }}"
+          mkdir -p sdk
+          if [ "${{ matrix.sdk_ext }}" = "zst" ]; then
+            tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+          else
+            tar -xJf sdk.tar.xz -C sdk --strip-components=1
+          fi
+
+      - name: Copy package into SDK
+        run: |
+          set -e
+          cp -r ./luci-app-iptv-scanner sdk/package/luci-app-iptv-scanner
+          # 保险起见再 chmod 一次，防止某些文件系统丢了 x 位
+          chmod +x sdk/package/luci-app-iptv-scanner/root/usr/bin/iptv_scanner
+          chmod +x sdk/package/luci-app-iptv-scanner/root/usr/libexec/iptv-scanner-ctl
+          echo "=== package tree ==="
+          find sdk/package/luci-app-iptv-scanner -type f | sort
+
+      - name: Update feeds
+        working-directory: sdk
+        run: |
+          set -e
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -p luci || ./scripts/feeds install -a
+          ./scripts/feeds install luci-base rpcd rpcd-mod-file libpcap
+
+      - name: Configure
+        working-directory: sdk
+        run: |
+          set -e
+          cat > .config <<'EOF'
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_PACKAGE_luci-app-iptv-scanner=m
+          EOF
+          make defconfig
+
+      - name: Build LuCI package only
+        working-directory: sdk
+        run: |
+          set -e
+          make package/luci-app-iptv-scanner/compile V=s
+
+      - name: Collect packages
+        run: |
+          set -e
+          mkdir -p dist
+          find sdk/bin/packages -type f \
+            \( -name 'luci-app-iptv-scanner_*.ipk' \
+               -o -name 'luci-app-iptv-scanner-*.apk' \) \
+            -exec cp -v {} dist/ \;
+          echo "=== collected ==="
+          ls -la dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptv-scanner-luci-${{ matrix.format }}
+          path: dist/
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.*pk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
