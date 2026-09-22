@@ -47,7 +47,7 @@ jobs:
 
       - name: Copy source into SDK package dir
         run: |
-          mkdir -p sdk/package/luci-app-iptv-scan
+          mkdir -p sdk/package/luci-app-iptv-scanner
           cp -r ./luci-app-iptv-scanner sdk/package/luci-app-iptv-scanner/
 
       - name: Update and install feeds
