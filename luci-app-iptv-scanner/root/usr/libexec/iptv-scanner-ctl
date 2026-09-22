@@ -1,0 +1,115 @@
+#!/bin/sh
+# IPTV 扫描器控制器：start / stop / restart / status / cat-m3u / cat-log
+
+BIN="/usr/bin/iptv_scanner"
+PIDFILE="/var/run/iptv_scan.pid"
+LOGFILE="/tmp/iptv_scan.log"
+
+. /lib/functions.sh
+
+# 返回存活 PID；不存在则返回 1
+is_running() {
+	if [ -f "$PIDFILE" ]; then
+		PID=$(cat "$PIDFILE" 2>/dev/null)
+		if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+			echo "$PID"
+			return 0
+		fi
+		rm -f "$PIDFILE"
+	fi
+	return 1
+}
+
+load_cfg() {
+	config_load iptv_scanner
+	config_get timeout   settings timeout   '2'
+	config_get m3u_file  settings m3u_file  '/tmp/iptv.m3u'
+	config_get interface settings interface 'lan1'
+	config_get ranges    settings ranges
+}
+
+ACTION="$1"
+
+case "$ACTION" in
+	start)
+		if PID=$(is_running); then
+			echo "已在运行 (PID: $PID)"
+			exit 0
+		fi
+
+		load_cfg
+
+		if [ -z "$ranges" ]; then
+			echo "错误：未配置扫描网段 (ranges)"
+			exit 1
+		fi
+		if [ ! -x "$BIN" ]; then
+			echo "错误：$BIN 不存在或不可执行"
+			exit 1
+		fi
+
+		# 后台运行，stdout/stderr 落到独立文件，避免与 C 程序的日志文件打架
+		"$BIN" "$interface" "$m3u_file" "$timeout" $ranges \
+			> /tmp/iptv_scan.stdout 2>&1 &
+
+		NEWPID=$!
+		echo "$NEWPID" > "$PIDFILE"
+		echo "已启动 (PID: $NEWPID, 接口: $interface, 等待: ${timeout}s, 网段: $ranges)"
+		;;
+
+	stop)
+		if PID=$(is_running); then
+			kill "$PID" 2>/dev/null
+			# 给它最多 1 秒优雅退出
+			i=0
+			while [ $i -lt 10 ]; do
+				kill -0 "$PID" 2>/dev/null || break
+				usleep 100000 2>/dev/null || sleep 1
+				i=$((i + 1))
+			done
+			kill -9 "$PID" 2>/dev/null
+			rm -f "$PIDFILE"
+			echo "已停止 (PID: $PID)"
+		else
+			echo "当前未运行"
+		fi
+		;;
+
+	restart)
+		"$0" stop >/dev/null
+		sleep 1
+		"$0" start
+		;;
+
+	status)
+		if PID=$(is_running); then
+			echo "running $PID"
+		else
+			echo "stopped"
+		fi
+		;;
+
+	cat-m3u)
+		load_cfg
+		if [ -f "$m3u_file" ]; then
+			cat "$m3u_file"
+		else
+			echo "(文件不存在: $m3u_file)"
+		fi
+		;;
+
+	cat-log)
+		if [ -f "$LOGFILE" ]; then
+			tail -n 200 "$LOGFILE"
+		else
+			echo "(日志文件不存在: $LOGFILE)"
+		fi
+		;;
+
+	*)
+		echo "用法: $0 {start|stop|restart|status|cat-m3u|cat-log}"
+		exit 1
+		;;
+esac
+
+exit 0

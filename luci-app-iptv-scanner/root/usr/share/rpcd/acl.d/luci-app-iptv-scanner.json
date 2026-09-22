@@ -1,0 +1,20 @@
+{
+	"luci-app-iptv-scanner": {
+		"description": "IPTV Scanner control",
+		"read": {
+			"uci": ["iptv_scanner"],
+			"ubus": {
+				"network.device": ["status"]
+			},
+			"file": {
+				"/usr/libexec/iptv-scanner-ctl": ["exec"]
+			}
+		},
+		"write": {
+			"uci": ["iptv_scanner"],
+			"file": {
+				"/usr/libexec/iptv-scanner-ctl": ["exec"]
+			}
+		}
+	}
+}

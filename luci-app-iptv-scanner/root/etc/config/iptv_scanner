@@ -1,0 +1,8 @@
+
+config iptvscanner 'settings'
+	option timeout '1'
+	option m3u_file '/www/iptv.m3u'
+	list ranges '239.81.0'
+	list ranges '239.81.1'
+	option interface 'wan'
+
