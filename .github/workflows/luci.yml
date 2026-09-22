@@ -61,8 +61,7 @@ jobs:
         run: |
           set -e
           ./scripts/feeds update -a
-          ./scripts/feeds install -a -p luci || ./scripts/feeds install -a
-          ./scripts/feeds install luci-base rpcd rpcd-mod-file
+          ./scripts/feeds install -a 
 
       - name: Configure
         working-directory: sdk
