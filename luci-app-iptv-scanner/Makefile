@@ -8,6 +8,6 @@ LUCI_TITLE:=LuCI app for IPTV multicast scanner
 LUCI_DEPENDS:=+iptv_scanner +rpcd +rpcd-mod-file
 LUCI_PKGARCH:=all
 
-include ../../luci.mk
+include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature
