@@ -2,12 +2,9 @@ name: Build IPTV Scanner LuCI Package
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
