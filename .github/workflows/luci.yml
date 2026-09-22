@@ -51,7 +51,7 @@ jobs:
           set -e
           cp -r ./luci-app-iptv-scanner sdk/package/luci-app-iptv-scanner
           # 保险起见再 chmod 一次，防止某些文件系统丢了 x 位
-          chmod +x sdk/package/luci-app-iptv-scanner/root/usr/bin/iptv_scanner
+          # chmod +x sdk/package/luci-app-iptv-scanner/root/usr/bin/iptv_scanner
           chmod +x sdk/package/luci-app-iptv-scanner/root/usr/libexec/iptv-scanner-ctl
           echo "=== package tree ==="
           find sdk/package/luci-app-iptv-scanner -type f | sort
@@ -62,7 +62,7 @@ jobs:
           set -e
           ./scripts/feeds update -a
           ./scripts/feeds install -a -p luci || ./scripts/feeds install -a
-          ./scripts/feeds install luci-base rpcd rpcd-mod-file libpcap
+          ./scripts/feeds install luci-base rpcd rpcd-mod-file
 
       - name: Configure
         working-directory: sdk
