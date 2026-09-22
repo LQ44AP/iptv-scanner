@@ -1,125 +1,150 @@
-name: Build IPTV Scan Packages
+name: Build for Multiple OpenWrt Versions (IPK & APK)
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    tags: [ "v*" ]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build (${{ matrix.version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - version: '23.05.6'
-            format: 'ipk'
-            sdk_url: 'https://downloads.openwrt.org/releases/23.05.6/targets/x86/64/openwrt-sdk-23.05.6-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz'
-            sdk_ext: 'xz'
-          - version: '25.12.5'
-            format: 'apk'
-            sdk_url: 'https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst'
-            sdk_ext: 'zst'
+        version: [23.05.6, 25.12.5]
+        arch:
+          - { name: mipsel_24kc, target: ramips, subtarget: mt7621 }
+          - { name: mips_24kc, target: ath79, subtarget: generic }
+          - { name: x86_64, target: x86, subtarget: 64 }
+          - { name: aarch64_generic, target: rockchip, subtarget: armv8 }
 
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install zstd
-        run: sudo apt-get update && sudo apt-get install -y zstd
-
-      - name: Download OpenWrt SDK
+      - name: Install Dependencies
         run: |
-          set -e
-          wget -q -O sdk.tar.${{ matrix.sdk_ext }} "${{ matrix.sdk_url }}"
-          mkdir -p sdk
-          if [ "${{ matrix.sdk_ext }}" = "zst" ]; then
-            tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
+            libssl-dev xsltproc wget unzip qemu-utils python3 file zstd tar
+
+      - name: Set version-specific variables
+        id: vars
+        run: |
+          VERSION="${{ matrix.version }}"
+          if [[ "$VERSION" =~ ^25\. ]] || [[ "$VERSION" =~ ^main ]]; then
+            echo "suffix=apk" >> $GITHUB_OUTPUT
+            echo "ext=zst" >> $GITHUB_OUTPUT
+            echo "sdk_pattern=openwrt-sdk-*.tar.zst" >> $GITHUB_OUTPUT
           else
-            tar -xJf sdk.tar.xz -C sdk --strip-components=1
+            echo "suffix=ipk" >> $GITHUB_OUTPUT
+            echo "ext=xz" >> $GITHUB_OUTPUT
+            echo "sdk_pattern=openwrt-sdk-*.tar.xz" >> $GITHUB_OUTPUT
           fi
 
-      - name: Copy package sources into SDK
+      - name: Download and Setup SDK
         run: |
-          set -e
-          # ✅ 直接把两个包目录整体拷入，不要嵌套，不要重命名
-          cp -r ./iptv-scanner          sdk/package/iptv-scanner
-          cp -r ./luci-app-iptv-scanner sdk/package/luci-app-iptv-scanner
-          echo "=== package dir ==="
-          ls -la sdk/package/
+          VERSION="${{ matrix.version }}"
+          TARGET="${{ matrix.arch.target }}"
+          SUBTARGET="${{ matrix.arch.subtarget }}"
+          SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}/"
+          PATTERN="${{ steps.vars.outputs.sdk_pattern }}"
 
-      - name: Update and install feeds
-        working-directory: sdk
+          wget -nv -r -l1 -nd -A "$PATTERN" -e robots=off "$SDK_BASE" || true
+          SDK_FILE=$(ls $PATTERN 2>/dev/null | head -n 1)
+
+          if [ -z "$SDK_FILE" ]; then
+            echo "::error::No SDK file found at $SDK_BASE"
+            exit 1
+          fi
+
+          EXT="${{ steps.vars.outputs.ext }}"
+          if [ "$EXT" = "xz" ]; then
+            tar -xJf "$SDK_FILE"
+          elif [ "$EXT" = "zst" ]; then
+            tar --zstd -xf "$SDK_FILE"
+          fi
+
+          SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
+          if [ -z "$SDK_DIR" ]; then
+            echo "::error::Failed to extract SDK"
+            exit 1
+          fi
+          mv "$SDK_DIR" openwrt-sdk
+
+      - name: Compile Package
         run: |
-          set -e
+          cd openwrt-sdk
           ./scripts/feeds update -a
-          # luci feed 需要安装完整，否则 luci.mk 宏缺失
-          ./scripts/feeds install -a -p luci || ./scripts/feeds install -a
-          ./scripts/feeds install luci-base rpcd rpcd-mod-file libpcap
+          ./scripts/feeds install libpcap
 
-      - name: Configure
-        working-directory: sdk
-        run: |
-          set -e
+          mkdir -p package/iptv_scanner
+          if [ -d "../src" ]; then cp -r ../src package/iptv_scanner/; fi
+          cp ../Makefile package/iptv_scanner/
+
+          echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
           make defconfig
 
-      - name: Build packages
-        working-directory: sdk
-        run: |
-          set -e
-          make package/iptv-scanner/compile           V=s
-          make package/luci-app-iptv-scanner/compile  V=s
+          make package/iptv_scanner/compile V=s -j$(nproc)
 
-      - name: Collect packages
+      - name: Organize Artifacts
         run: |
-          set -e
-          mkdir -p dist
-          # 递归找，两种格式都收
-          find sdk/bin/packages -type f \
-            \( -name 'iptv-scanner_*.ipk' \
-               -o -name 'iptv-scanner-*.apk' \
-               -o -name 'luci-app-iptv-scanner_*.ipk' \
-               -o -name 'luci-app-iptv-scanner-*.apk' \) \
-            -exec cp -v {} dist/ \;
-          echo "=== collected ==="
-          ls -la dist/
+          mkdir -p ./deploy
+          SUFFIX="${{ steps.vars.outputs.suffix }}"
+          ARCH_NAME="${{ matrix.arch.name }}"
 
-      - name: Upload artifacts
+          # 仅查找以 iptv_scanner 开头的 ipk 或 apk 安装包
+          FILES=$(find openwrt-sdk/bin/ -type f \( -name "iptv_scanner*.ipk" -o -name "iptv_scanner*.apk" \))
+
+          if [ -z "$FILES" ]; then
+            echo "::error::No iptv_scanner package files produced!"
+            exit 1
+          fi
+
+          for FILE in $FILES; do
+            FILENAME=$(basename "$FILE")
+            
+            # 如果是 apk 格式且文件名中尚未包含架构名称，追加架构名
+            if [[ "$FILENAME" == *.apk ]] && [[ "$FILENAME" != *"${ARCH_NAME}"* ]]; then
+              BASE_NAME="${FILENAME%.*}"
+              NEW_NAME="${BASE_NAME}_${ARCH_NAME}.apk"
+              cp "$FILE" "./deploy/${NEW_NAME}"
+              echo "Copied & Renamed APK: $FILENAME -> $NEW_NAME"
+            else
+              # ipk 或已带架构名的包直接复制
+              cp "$FILE" ./deploy/
+              echo "Copied Package: $FILENAME"
+            fi
+          done
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: iptv-scan-${{ matrix.format }}
-          path: dist/
-          retention-days: 30
-          if-no-files-found: error
+          # 必须将 version 和 arch.name 结合命名，防止不同 matrix 任务相互覆盖 Artifact
+          name: iptv_scanner-${{ matrix.version }}-${{ matrix.arch.name }}
+          path: ./deploy/*
 
-  release:
-    name: Publish Release
+  publish:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: ./release-assets
           merge-multiple: true
-
-      - name: List artifacts
-        run: |
-          echo "=== release files ==="
-          find artifacts -type f -printf '%p\n'
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.*pk
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            ./release-assets/*.ipk
+            ./release-assets/*.apk
+          body: |
+            ## IPTV 扫描器多架构 / 多版本自动编译
+          generate_release_notes: false
+
