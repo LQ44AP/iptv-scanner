@@ -21,10 +21,9 @@ jobs:
             format: 'ipk'
             sdk_url: 'https://downloads.openwrt.org/releases/23.05.6/targets/x86/64/openwrt-sdk-23.05.6-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz'
             sdk_ext: 'xz'
-          # ⚠️ 25.12.5 目前不存在，请替换为实际版本；下面示例用 24.10.0
-          - version: '24.10.0'
+          - version: '25.12.5'
             format: 'apk'
-            sdk_url: 'https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst'
+            sdk_url: 'https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst'
             sdk_ext: 'zst'
 
     steps:
