@@ -50,7 +50,7 @@ case "$ACTION" in
 
 		# 后台运行，stdout/stderr 落到独立文件，避免与 C 程序的日志文件打架
 		"$BIN" "$interface" "$m3u_file" "$timeout" $ranges \
-			> /tmp/iptv_scan.stdout 2>&1 &
+			> /tmp/iptv_scanner.stdout 2>&1 &
 		# "$BIN" "$interface" "$m3u_file" "$timeout" $ranges 2>&1 &
 
 		NEWPID=$!
