@@ -2,7 +2,7 @@
 # IPTV 扫描器控制器：start / stop / restart / status / cat-m3u / cat-log
 
 BIN="/usr/bin/iptv_scanner"
-PIDFILE="/var/run/iptv_scan.pid"
+PIDFILE="/var/run/iptv_scanner.pid"
 LOGFILE="/tmp/iptv_scanner.log"
 
 . /lib/functions.sh
