@@ -83,7 +83,7 @@ jobs:
 
           mkdir -p package/iptv_scanner
           # if [ -d "../iptv_scanner" ]; then cp -r ../iptv_scanner package/iptv_scanner/; fi
-          cp  -r ../iptv_scanner package/iptv_scanner/
+          cp  -r ./iptv_scanner package/iptv_scanner/
 
           echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
           make defconfig
