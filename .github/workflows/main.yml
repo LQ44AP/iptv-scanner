@@ -81,10 +81,9 @@ jobs:
         run: |
           cd openwrt-sdk
 
-          # 更新 feed 索引；libpcap 会由 DEPENDS:=+libpcap 在 defconfig 阶段自动选中
           ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-          # 拷包：源结尾的 /. 表示"拷贝目录内容"，否则会多嵌一层 iptv_scanner/iptv_scanner
           mkdir -p package/iptv_scanner
           rsync -a --exclude='.git' --exclude='.github' --exclude='.gitignore' \
             ../iptv_scanner/ package/iptv_scanner/
