@@ -16,9 +16,9 @@ jobs:
       matrix:
         version: [23.05.6, 25.12.5]
         arch:
-          - { name: mipsel_24kc, target: ramips, subtarget: mt7621 }
-          - { name: mips_24kc, target: ath79, subtarget: generic }
-          - { name: x86_64, target: x86, subtarget: 64 }
+          - { name: mipsel_24kc,     target: ramips, subtarget: mt7621 }
+          - { name: mips_24kc,       target: ath79,  subtarget: generic }
+          - { name: x86_64,          target: x86,    subtarget: 64 }
           - { name: aarch64_generic, target: rockchip, subtarget: armv8 }
 
     steps:
@@ -29,20 +29,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
-            libssl-dev xsltproc wget unzip qemu-utils python3 file zstd tar
+            libssl-dev xsltproc wget unzip python3 file zstd tar rsync
 
       - name: Set version-specific variables
         id: vars
         run: |
           VERSION="${{ matrix.version }}"
           if [[ "$VERSION" =~ ^25\. ]] || [[ "$VERSION" =~ ^main ]]; then
-            echo "suffix=apk" >> $GITHUB_OUTPUT
-            echo "ext=zst" >> $GITHUB_OUTPUT
-            echo "sdk_pattern=openwrt-sdk-*.tar.zst" >> $GITHUB_OUTPUT
+            echo "suffix=apk" >> "$GITHUB_OUTPUT"
+            echo "ext=zst"   >> "$GITHUB_OUTPUT"
+            echo "sdk_pattern=openwrt-sdk-*.tar.zst" >> "$GITHUB_OUTPUT"
           else
-            echo "suffix=ipk" >> $GITHUB_OUTPUT
-            echo "ext=xz" >> $GITHUB_OUTPUT
-            echo "sdk_pattern=openwrt-sdk-*.tar.xz" >> $GITHUB_OUTPUT
+            echo "suffix=ipk" >> "$GITHUB_OUTPUT"
+            echo "ext=xz"   >> "$GITHUB_OUTPUT"
+            echo "sdk_pattern=openwrt-sdk-*.tar.xz" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Download and Setup SDK
@@ -52,25 +52,27 @@ jobs:
           SUBTARGET="${{ matrix.arch.subtarget }}"
           SDK_BASE="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}/${SUBTARGET}/"
           PATTERN="${{ steps.vars.outputs.sdk_pattern }}"
+          EXT="${{ steps.vars.outputs.ext }}"
 
-          wget -nv -r -l1 -nd -A "$PATTERN" -e robots=off "$SDK_BASE" || true
+          wget -nv -r -l1 -nd -A "$PATTERN" -e robots=off "$SDK_BASE"
           SDK_FILE=$(ls $PATTERN 2>/dev/null | head -n 1)
 
           if [ -z "$SDK_FILE" ]; then
             echo "::error::No SDK file found at $SDK_BASE"
             exit 1
           fi
+          echo "Found SDK: $SDK_FILE"
 
-          EXT="${{ steps.vars.outputs.ext }}"
           if [ "$EXT" = "xz" ]; then
             tar -xJf "$SDK_FILE"
-          elif [ "$EXT" = "zst" ]; then
+          else
             tar --zstd -xf "$SDK_FILE"
           fi
 
-          SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
-          if [ -z "$SDK_DIR" ]; then
-            echo "::error::Failed to extract SDK"
+          # 从 tar 文件名推 SDK 目录名，避免 find 到多个时选错
+          SDK_DIR="${SDK_FILE%.tar.*}"
+          if [ ! -d "$SDK_DIR" ]; then
+            echo "::error::SDK dir not found after extract: $SDK_DIR"
             exit 1
           fi
           mv "$SDK_DIR" openwrt-sdk
@@ -78,54 +80,72 @@ jobs:
       - name: Compile Package
         run: |
           cd openwrt-sdk
-          ./scripts/feeds update -a
-          ./scripts/feeds install libpcap
 
+          # 更新 feed 索引；libpcap 会由 DEPENDS:=+libpcap 在 defconfig 阶段自动选中
+          ./scripts/feeds update -a
+
+          # 拷包：源结尾的 /. 表示"拷贝目录内容"，否则会多嵌一层 iptv_scanner/iptv_scanner
           mkdir -p package/iptv_scanner
-          if [ -d "../iptv_scanner" ]; then cp -r ../iptv_scanner package/iptv_scanner/; fi
-          cp  -r ../iptv_scanner package/iptv_scanner/
+          rsync -a --exclude='.git' --exclude='.github' --exclude='.gitignore' \
+            ../iptv_scanner/ package/iptv_scanner/
+
+          echo "=== package/iptv_scanner 内容 ==="
+          find package/iptv_scanner -maxdepth 2 | head -50
+
+          # 提前失败，避免 make 报 "No rule to make target"
+          test -f package/iptv_scanner/Makefile || {
+            echo "::error::Makefile 不在 package/iptv_scanner/Makefile，检查拷贝路径"
+            exit 1
+          }
 
           echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
           make defconfig
 
-          make package/iptv_scanner/compile V=s -j$(nproc)
+          # 校验依赖已被 defconfig 拉入
+          grep -q '^CONFIG_PACKAGE_libpcap=' .config || {
+            echo "::error::libpcap 未被选中，请检查 Makefile 的 DEPENDS"
+            exit 1
+          }
+
+          make package/iptv_scanner/compile V=s -j"$(nproc)"
 
       - name: Organize Artifacts
         run: |
           mkdir -p ./deploy
-          SUFFIX="${{ steps.vars.outputs.suffix }}"
           ARCH_NAME="${{ matrix.arch.name }}"
 
-          # 仅查找以 iptv_scanner 开头的 ipk 或 apk 安装包
-          FILES=$(find openwrt-sdk/bin/ -type f \( -name "iptv_scanner*.ipk" -o -name "iptv_scanner*.apk" \))
+          # 用 -print0 兼容文件名中的空格
+          FOUND=0
+          while IFS= read -r -d '' FILE; do
+            FOUND=1
+            FILENAME=$(basename "$FILE")
 
-          if [ -z "$FILES" ]; then
+            if [[ "$FILENAME" == *.apk ]]; then
+              # apk 文件名不含架构，统一加后缀便于用户区分
+              BASE_NAME="${FILENAME%.apk}"
+              cp "$FILE" "./deploy/${BASE_NAME}_${ARCH_NAME}.apk"
+              echo "Copied & Renamed APK: $FILENAME -> ${BASE_NAME}_${ARCH_NAME}.apk"
+            else
+              cp "$FILE" ./deploy/
+              echo "Copied IPK: $FILENAME"
+            fi
+          done < <(find openwrt-sdk/bin/ -type f \
+                     \( -name 'iptv_scanner*.ipk' -o -name 'iptv_scanner*.apk' \) -print0)
+
+          if [ "$FOUND" -eq 0 ]; then
             echo "::error::No iptv_scanner package files produced!"
             exit 1
           fi
 
-          for FILE in $FILES; do
-            FILENAME=$(basename "$FILE")
-            
-            # 如果是 apk 格式且文件名中尚未包含架构名称，追加架构名
-            if [[ "$FILENAME" == *.apk ]] && [[ "$FILENAME" != *"${ARCH_NAME}"* ]]; then
-              BASE_NAME="${FILENAME%.*}"
-              NEW_NAME="${BASE_NAME}_${ARCH_NAME}.apk"
-              cp "$FILE" "./deploy/${NEW_NAME}"
-              echo "Copied & Renamed APK: $FILENAME -> $NEW_NAME"
-            else
-              # ipk 或已带架构名的包直接复制
-              cp "$FILE" ./deploy/
-              echo "Copied Package: $FILENAME"
-            fi
-          done
+          echo "=== 最终产物 ==="
+          ls -la ./deploy/
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          # 必须将 version 和 arch.name 结合命名，防止不同 matrix 任务相互覆盖 Artifact
           name: iptv_scanner-${{ matrix.version }}-${{ matrix.arch.name }}
           path: ./deploy/*
+          if-no-files-found: error
 
   publish:
     needs: build
@@ -146,5 +166,8 @@ jobs:
             ./release-assets/*.apk
           body: |
             ## IPTV 扫描器多架构 / 多版本自动编译
+
+            包含 ipk（OpenWrt 23.05.x）与 apk（OpenWrt 25.12.x）两种格式。
           generate_release_notes: false
+          fail_on_unmatched_files: false
 
