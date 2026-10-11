@@ -98,6 +98,7 @@ jobs:
           done
 
           echo "=== package/luci-app-iptv-scanner 内容 ==="
+          chmod +x openwrt-sdk/package/luci-app-iptv-scanner/root/usr/libexec/iptv-scanner-ctl
           find package/luci-app-iptv-scanner -maxdepth 2 | head -50
           echo "=== package/iptv_scanner 内容 ==="
           find package/iptv_scanner -maxdepth 2 | head -50
