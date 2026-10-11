@@ -16,9 +16,9 @@ jobs:
       matrix:
         version: [23.05.6, 25.12.5]
         arch:
-          - { name: mipsel_24kc,     target: ramips, subtarget: mt7621 }
-          - { name: mips_24kc,       target: ath79,  subtarget: generic }
-          - { name: x86_64,          target: x86,    subtarget: 64 }
+          - { name: mipsel_24kc,     target: ramips,   subtarget: mt7621 }
+          - { name: mips_24kc,       target: ath79,    subtarget: generic }
+          - { name: x86_64,          target: x86,      subtarget: 64 }
           - { name: aarch64_generic, target: rockchip, subtarget: armv8 }
 
     steps:
@@ -29,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev gawk git gettext \
-            libssl-dev xsltproc wget unzip python3 file zstd tar rsync
+            libssl-dev xsltproc wget unzip python3 file zstd tar rsync python3-pyelftools
 
       - name: Set version-specific variables
         id: vars
@@ -84,29 +84,50 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-          mkdir -p package/iptv_scanner
-          rsync -a --exclude='.git' --exclude='.github' --exclude='.gitignore' \
-            ../iptv_scanner/ package/iptv_scanner/
+          # 直接用 cp -a 拷贝两个包目录到 package/ 下
+          for pkg in luci-app-iptv-scanner iptv_scanner; do
+            if [ ! -d "../$pkg" ]; then
+              echo "::error::源目录不存在：../$pkg"
+              exit 1
+            fi
+            rm -rf "package/$pkg"
+            cp -a "../$pkg" "package/"
+            # 清理包目录里的版本控制/CI 残留
+            rm -rf "package/$pkg/.git" "package/$pkg/.github" "package/$pkg/.gitignore"
+            echo "Copied $pkg"
+          done
 
+          echo "=== package/luci-app-iptv-scanner 内容 ==="
+          find package/luci-app-iptv-scanner -maxdepth 2 | head -50
           echo "=== package/iptv_scanner 内容 ==="
           find package/iptv_scanner -maxdepth 2 | head -50
 
           # 提前失败，避免 make 报 "No rule to make target"
+          test -f package/luci-app-iptv-scanner/Makefile || {
+            echo "::error::Makefile 不在 package/luci-app-iptv-scanner/Makefile，检查拷贝路径"
+            exit 1
+          }
           test -f package/iptv_scanner/Makefile || {
             echo "::error::Makefile 不在 package/iptv_scanner/Makefile，检查拷贝路径"
             exit 1
           }
 
-          echo "CONFIG_PACKAGE_iptv_scanner=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-iptv-scanner=y" >> .config
+          echo "CONFIG_PACKAGE_iptv_scanner=y"          >> .config
           make defconfig
 
-          # 校验依赖已被 defconfig 拉入
-          grep -q '^CONFIG_PACKAGE_libpcap=' .config || {
-            echo "::error::libpcap 未被选中，请检查 Makefile 的 DEPENDS"
+          # 校验两个包都被选中
+          grep -q '^CONFIG_PACKAGE_luci-app-iptv-scanner=y' .config || {
+            echo "::error::luci-app-iptv-scanner 未被选中，请检查 Makefile 的 DEPENDS"
+            exit 1
+          }
+          grep -q '^CONFIG_PACKAGE_iptv_scanner=y' .config || {
+            echo "::error::iptv_scanner 未被选中，请检查 Makefile 的 DEPENDS"
             exit 1
           }
 
-          make package/iptv_scanner/compile V=s -j"$(nproc)"
+          make package/luci-app-iptv-scanner/compile V=s -j"$(nproc)"
+          make package/iptv_scanner/compile        V=s -j"$(nproc)"
 
       - name: Organize Artifacts
         run: |
@@ -119,20 +140,26 @@ jobs:
             FOUND=1
             FILENAME=$(basename "$FILE")
 
-            if [[ "$FILENAME" == *.apk ]]; then
-              # apk 文件名不含架构，统一加后缀便于用户区分
+            if [[ "$FILENAME" == luci-app-iptv-scanner* ]]; then
+              # luci 界面包：架构无关，不加后缀
+              cp "$FILE" ./deploy/
+              echo "Copied LuCI: $FILENAME"
+            elif [[ "$FILENAME" == *.apk ]]; then
+              # iptv_scanner 的 apk 文件名不含架构，加后缀便于区分
               BASE_NAME="${FILENAME%.apk}"
               cp "$FILE" "./deploy/${BASE_NAME}_${ARCH_NAME}.apk"
               echo "Copied & Renamed APK: $FILENAME -> ${BASE_NAME}_${ARCH_NAME}.apk"
             else
+              # iptv_scanner 的 ipk 文件名自带架构，直接拷贝
               cp "$FILE" ./deploy/
               echo "Copied IPK: $FILENAME"
             fi
           done < <(find openwrt-sdk/bin/ -type f \
-                     \( -name 'iptv_scanner*.ipk' -o -name 'iptv_scanner*.apk' \) -print0)
+                     \( -name 'luci-app-iptv-scanner*.ipk' -o -name 'luci-app-iptv-scanner*.apk' \
+                        -o -name 'iptv_scanner*.ipk'       -o -name 'iptv_scanner*.apk' \) -print0)
 
           if [ "$FOUND" -eq 0 ]; then
-            echo "::error::No iptv_scanner package files produced!"
+            echo "::error::No iptv_scanner/luci-app-iptv-scanner package files produced!"
             exit 1
           fi
 
@@ -164,7 +191,7 @@ jobs:
             ./release-assets/*.ipk
             ./release-assets/*.apk
           body: |
-            ## IPTV 扫描器多架构 / 多版本自动编译
+            ## iptv_scanner (LuCI + 二进制) 多架构 / 多版本自动编译
 
             包含 ipk（OpenWrt 23.05.x）与 apk（OpenWrt 25.12.x）两种格式。
           generate_release_notes: false
